@@ -110,13 +110,44 @@ let thisMonday = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfY
 //   plutil -p ~/Library/Developer/CoreSimulator/Devices/*/data/Containers/Data/\
 //   Application/*/Library/Preferences/cn.Teethe.QuickAdd.plist
 
+// Each definition carries a decidable test, not just examples. Examples alone
+// failed: 工作 listed three of them and anything outside those three got pulled
+// into 创意, whose definition opened with "任何创意类".
+//
+// Subscribed calendars (中国大陆节假日, 2026 PLAN) are absent because EventKit
+// rejects writes to them and CalendarStore filters them out.
+
 let eventCalendars: [(title: String, definition: String)] = [
-    ("创意", "创意：任何创意类，比如艺术、和工作的区别是这个是为了提升自身能力。"),
-    ("工作", "工作：比如写合同、甲方对接、开会。"),
-    ("生活", "生活：散步、吃吃喝喝、休息。面向个人，并且不是提升类的，而是为了身心放松。"),
-    ("Calendar", "默认，拿不准就放这。"),
+    ("工作", "本职工作相关的一切——开会、写合同、甲方对接、做方案、汇报。"
+           + "判断标准是「有他人或组织在等这件事的结果」。"
+           + "不包括自发的个人项目（那属于 创意）、出差的行程本身（那属于 旅行）；"
+           + "出差期间的会议和工作内容仍属于 工作。"),
+
+    ("创意", "为自己而做的创作——写作、绘画、设计、个人项目、灵感记录。"
+           + "判断标准是「在产出作品，且没有外部交付对象」。"
+           + "不包括工作要求的产出（那属于 工作）、以吸收为主的学习（那属于 学习）。"),
+
+    ("学习", "以吸收知识为目的的活动——上课、读书、看教程、备考、练习技能。"
+           + "判断标准是「主要在输入，不产出作品」。"
+           + "不包括为工作交付而做的调研（那属于 工作）、以创作为目的的动手（那属于 创意）。"),
+
+    ("个人", "与自己身体和事务有关、需要去办的事——就医体检、健身、理财、证件办理、理发。"
+           + "判断标准是「有明确事项要完成，且只涉及自己」。"
+           + "不包括纯粹放松的活动（那属于 生活）、系统性的学习（那属于 学习）。"),
+
+    ("生活", "日常起居与社交放松——吃饭、聚会、看电影、逛街、家务、散步。"
+           + "判断标准是「以放松或维持日常为目的，没有明确产出」。"
+           + "不包括需要办理的个人事务（那属于 个人）、离开常住地的出行（那属于 旅行）。"),
+
+    ("旅行", "离开常住地的出行——行程、交通、住宿、景点，出差的行程部分也算。"
+           + "判断标准是「涉及跨城市或过夜的出行」。"
+           + "不包括本地的日常外出（那属于 生活）、出差期间的具体工作（那属于 工作）。"),
+
+    ("睡眠", "睡觉、午睡、作息记录。"),
+
+    ("日历", "默认归类。以上都不合适、或拿不准时放这里。"),
 ]
-let defaultEventCalendar = "Calendar"
+let defaultEventCalendar = "日历"
 
 let reminderLists: [(title: String, definition: String)] = [
     ("提醒事项", ""),
@@ -467,15 +498,18 @@ print("""
   events 4 · reminders 2
 
   event   past    \(today) 10:00–11:30   工作   过 Q3 方案   ← 边界项
-  event   past    \(today) 15:00                牙齿检查
-  event   future  \(today) 晚上           创意   写短篇小说
+  event   past    \(today) 15:00         个人   牙齿检查     ← 边界项
+  event   future  \(today) 晚上           创意   写短篇小说   ← 边界项
   event   future  \(nextMonday) 09:00     工作   部门例会
   remind  future  \(tomorrow) 之前               交周报
   remind  future  本周五之前                     订机票
 
-  边界项「过 Q3 方案」：在 创意 与 工作 之间摇摆说明两者的定义边界不清。
-  「工作」的定义若只列举几个例子而没有概括句，例子之外的工作内容会被
-  「创意」里的「任何创意类」吸走。
+  三个边界项各压一条分界线：
+    过 Q3 方案   工作 / 创意 —— 有没有外部交付对象
+    牙齿检查     个人 / 生活 —— 是要办的事还是放松
+    写短篇小说   创意 / 学习 —— 在产出还是在吸收
+
+  提醒事项走的是提醒列表命名空间，与日历无关，只有一个列表时不构成考验。
 
   日历名单来自本文件顶部的 eventCalendars / reminderLists，
   应与 App 设置保持一致。
