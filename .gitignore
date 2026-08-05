@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+*.swp
+
+# Xcode — user-specific data (per-developer, not for sharing)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.xccovarchivedata
+*.xccovreport
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods (uncomment if you use CocoaPods)
+# Pods/
