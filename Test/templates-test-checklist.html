@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<!--
+  手测清单模板 (manual test checklist template)
+  ─────────────────────────────────────────────
+  把这个文件复制进你的项目（建议放 Test/ 目录），改三处即可：
+    1) <title> 和页眉 <h1>/<div class="sub">：换成你的项目名与一句话描述。
+    2) 下方 const DATA：把示例分区/条目替换成你项目的真实用例（schema 见 DATA 上方注释）。
+    3) （可选）const KEY / META_KEY：若多个清单放在同一目录用 file:// 打开，
+       给每份起不同的 key，避免 localStorage 串数据。
+  其余 CSS / 交互 / 报告导出都是通用引擎，通常不用改。
+  打开方式：浏览器直接打开本文件即可，勾选状态自动存在本机 localStorage。
+-->
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目名 · 手测清单</title>
+<style>
+  :root{
+    --bg:#f5f5f7; --card:#ffffff; --text:#1d1d1f; --muted:#6e6e73; --line:#e3e3e6;
+    --accent:#0a84ff; --pass:#34c759; --fail:#ff3b30; --blocked:#ff9f0a;
+    --chip:#f0f0f2; --shadow:0 1px 3px rgba(0,0,0,.06),0 6px 18px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1c1c1e; --card:#2c2c2e; --text:#f5f5f7; --muted:#98989d; --line:#3a3a3c;
+      --accent:#0a84ff; --pass:#30d158; --fail:#ff453a; --blocked:#ffd60a;
+      --chip:#3a3a3c; --shadow:0 1px 3px rgba(0,0,0,.3),0 6px 18px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:880px; margin:0 auto; padding:24px 20px 80px}
+  header.app{position:sticky; top:0; z-index:10; background:color-mix(in srgb,var(--bg) 85%,transparent);
+    backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px);
+    margin:-24px -20px 18px; padding:16px 20px 12px; border-bottom:1px solid var(--line)}
+  h1{font-size:20px; margin:0 0 2px; font-weight:700; letter-spacing:-.01em}
+  .sub{color:var(--muted); font-size:12.5px}
+  .summary{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px}
+  .bar{flex:1; min-width:160px; height:8px; border-radius:99px; background:var(--chip); overflow:hidden; display:flex}
+  .bar > i{display:block; height:100%}
+  .stat{font-size:12px; color:var(--muted); white-space:nowrap}
+  .stat b{color:var(--text)}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:99px; vertical-align:middle; margin-right:3px}
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+  button.btn{font:inherit; font-size:12.5px; padding:6px 11px; border-radius:8px; border:1px solid var(--line);
+    background:var(--card); color:var(--text); cursor:pointer}
+  button.btn:hover{border-color:var(--accent)}
+  button.btn.danger:hover{border-color:var(--fail); color:var(--fail)}
+
+  .meta{display:flex; gap:10px; flex-wrap:wrap; margin:0 0 18px}
+  .meta label{display:flex; flex-direction:column; gap:3px; font-size:11px; color:var(--muted)}
+  .meta input{font:inherit; font-size:13px; padding:6px 9px; border-radius:8px; border:1px solid var(--line);
+    background:var(--card); color:var(--text); min-width:150px}
+
+  section.card{background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
+    margin:0 0 16px; overflow:hidden}
+  .sec-head{padding:13px 16px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:8px}
+  .sec-head h2{font-size:15px; margin:0; font-weight:650}
+  .sec-head .sct{font-size:11.5px; color:var(--muted); margin-left:auto}
+  .sub-head{padding:9px 16px 3px; font-size:12px; font-weight:650; color:var(--accent); letter-spacing:.02em}
+
+  .item{display:flex; gap:12px; padding:11px 16px; border-top:1px solid var(--line); align-items:flex-start}
+  .item:first-of-type{border-top:none}
+  .item .body{flex:1; min-width:0}
+  .item .t{font-size:13.5px}
+  .item .e{font-size:12px; color:var(--muted); margin-top:2px}
+  .status[data-s="pass"]{box-shadow:inset 3px 0 0 var(--pass)}
+  .status[data-s="fail"]{box-shadow:inset 3px 0 0 var(--fail)}
+  .status[data-s="blocked"]{box-shadow:inset 3px 0 0 var(--blocked)}
+
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; flex:none}
+  .seg button{font:inherit; font-size:13px; width:30px; height:28px; border:none; background:transparent;
+    color:var(--muted); cursor:pointer; border-left:1px solid var(--line)}
+  .seg button:first-child{border-left:none}
+  .seg button.on[data-v="pass"]{background:var(--pass); color:#fff}
+  .seg button.on[data-v="fail"]{background:var(--fail); color:#fff}
+  .seg button.on[data-v="blocked"]{background:var(--blocked); color:#1d1d1f}
+
+  .note-btn{font:inherit; font-size:11.5px; color:var(--muted); background:none; border:none; cursor:pointer; padding:3px 0 0; text-align:left}
+  .note-btn:hover{color:var(--accent)}
+  textarea.note{display:none; width:100%; margin-top:7px; font:inherit; font-size:12.5px; padding:7px 9px;
+    border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); resize:vertical; min-height:48px}
+  textarea.note.show{display:block}
+
+  .callout{margin:9px 16px; padding:9px 12px; border-radius:9px; background:var(--chip);
+    font-size:12px; color:var(--muted); border-left:3px solid var(--blocked)}
+  .callout b{color:var(--text)}
+  footer{color:var(--muted); font-size:11.5px; text-align:center; margin-top:24px}
+  .priority{display:inline-block; font-size:10px; font-weight:700; color:#fff; background:var(--accent);
+    border-radius:5px; padding:1px 5px; margin-left:6px; vertical-align:middle}
+  dialog{border:none; border-radius:14px; padding:0; box-shadow:var(--shadow); background:var(--card); color:var(--text); max-width:680px; width:92%}
+  dialog::backdrop{background:rgba(0,0,0,.35)}
+  .dlg-h{padding:14px 16px; border-bottom:1px solid var(--line); font-weight:650}
+  .dlg-b{padding:14px 16px}
+  .dlg-b textarea{width:100%; min-height:280px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+    border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); padding:10px}
+  .dlg-f{padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <!-- 改这里：项目名 + 一句话描述 -->
+    <h1>项目名 · 手测清单</h1>
+    <div class="sub">一句话描述待测范围（如：核心功能 / 本次改动） · 状态自动保存在本浏览器（localStorage）</div>
+    <div class="summary">
+      <div class="bar" id="bar"></div>
+      <div class="stat" id="stat"></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btnFail">复制未通过项 (Markdown)</button>
+      <button class="btn" id="btnAll">复制完整报告</button>
+      <button class="btn danger" id="btnReset">重置全部</button>
+    </div>
+  </header>
+
+  <div class="meta">
+    <label>测试人 <input id="m-tester" placeholder="名字"></label>
+    <label>日期 <input id="m-date" placeholder="YYYY-MM-DD"></label>
+    <label>构建/commit <input id="m-build" placeholder="例如 1a2b3c4"></label>
+    <label>环境 <input id="m-os" placeholder="例如 macOS 26.5"></label>
+  </div>
+
+  <div id="content"></div>
+
+  <footer>勾选即保存到本机浏览器。换电脑/清缓存会丢失，重要结果请用「复制」导出。</footer>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-h" id="dlg-h">报告</div>
+  <div class="dlg-b"><textarea id="dlg-t" readonly></textarea></div>
+  <div class="dlg-f">
+    <button class="btn" id="dlg-copy">复制到剪贴板</button>
+    <button class="btn" id="dlg-close">关闭</button>
+  </div>
+</dialog>
+
+<script>
+/*
+  把下面的 DATA 换成你项目的真实用例。结构：
+
+  DATA = [ 分区, 分区, ... ]，每个分区(section)：
+    {
+      id:    "s1"            // 唯一 id，随意但别重复
+      title: "1 · 分区标题"  // 显示在卡片标题
+      pri:   true            // 可选；true 时标题旁显示「重点」徽章
+      note:  "蓝色说明条"    // 可选；分区顶部的前置说明/准备步骤
+      callout:"黄色提醒条"   // 可选；分区底部的已知限制/注意（自动加 ⚠）
+      items: [ 条目, 条目, ... ]
+    }
+
+  每个条目(item)：
+    {
+      id: "1.1"             // 唯一 id；勾选状态按这个 id 存储，改了会丢历史
+      t:  "要验证的操作/预期" // 必填，条目正文
+      e:  "更细的期望结果"    // 可选，灰色「期望：」小字
+      g:  "子分组标题"        // 可选，连续相同 g 的条目会归到一个小标题下
+    }
+*/
+const DATA = [
+  { id:"s0", title:"0 · 准备 & 环境", note:"写清开测前要做什么：怎么启动、用哪个账号/数据、如何把状态重置干净。例：删除 ~/Library/.../config.json 后重启。", items:[
+    { id:"0.1", t:"（替换我）启动应用 / 打开待测页面，进入初始状态。", e:"无报错、无残留旧数据。" },
+    { id:"0.2", t:"（替换我）准备好测试所需的账号 / 样例数据 / 权限。" },
+  ]},
+  { id:"s1", title:"1 · 核心流程", pri:true, note:"最该先测、出问题影响最大的主路径放这里（pri:true 会标「重点」）。", items:[
+    { id:"1.1", t:"（替换我）核心操作 A 正常完成。", e:"写出可观察的预期结果，方便别人复现判断。" },
+    { id:"1.2", g:"分组示例：场景一", t:"（替换我）同一功能下，子场景 a 的表现。" },
+    { id:"1.3", g:"分组示例：场景一", t:"（替换我）子场景 b 的表现。" },
+    { id:"1.4", g:"分组示例：场景二", t:"（替换我）切换到另一组前置条件后再验证。" },
+  ], callout:"（可选）记录该分区的已知限制 / 非 bug 的预期行为，避免被误报成失败。" },
+  { id:"s2", title:"2 · 边界 & 错误处理", note:"空输入、超长、并发、断网、权限不足、重复操作等异常路径。", items:[
+    { id:"2.1", t:"（替换我）非法/空输入被正确拦截，给出可理解的提示。" },
+    { id:"2.2", t:"（替换我）外部依赖失败（断网/超时）时安全降级，不崩溃、不丢数据。" },
+    { id:"2.3", t:"（替换我）重复触发 / 快速连点不会产生重复副作用。" },
+  ]},
+  { id:"s3", title:"3 · 持久化 & 回归", note:"改动是否影响既有功能；重启/刷新后状态是否正确保留。", items:[
+    { id:"3.1", t:"（替换我）退出重进 / 刷新后，数据与设置完整保留。" },
+    { id:"3.2", t:"（替换我）本次改动之外的既有功能行为不变。" },
+  ]},
+];
+
+// 多份清单放同目录、都用 file:// 打开时，给每份起不同 key，避免互相覆盖。
+const KEY = "manual-tests-v1";
+const META_KEY = "manual-tests-meta-v1";
+const STATES = ["pass","fail","blocked"];
+const SYM = {pass:"✓", fail:"✗", blocked:"⚠"};
+let store = JSON.parse(localStorage.getItem(KEY) || "{}");
+
+function save(){ localStorage.setItem(KEY, JSON.stringify(store)); }
+function get(id){ return store[id] || {status:"", note:""}; }
+function set(id, patch){ store[id] = Object.assign(get(id), patch); save(); render(); }
+
+// ---- meta inputs ----
+const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}");
+["tester","date","build","os"].forEach(k=>{
+  const el = document.getElementById("m-"+k);
+  el.value = meta[k] || "";
+  el.addEventListener("input", ()=>{ meta[k]=el.value; localStorage.setItem(META_KEY, JSON.stringify(meta)); });
+});
+
+function allItems(){ return DATA.flatMap(s=>s.items); }
+
+function render(){
+  const root = document.getElementById("content");
+  root.innerHTML = "";
+  for(const sec of DATA){
+    const card = document.createElement("section");
+    card.className = "card";
+    const done = sec.items.filter(i=>get(i.id).status).length;
+    card.insertAdjacentHTML("beforeend",
+      `<div class="sec-head"><h2>${sec.title}${sec.pri?'<span class="priority">重点</span>':''}</h2>
+       <span class="sct">${done}/${sec.items.length}</span></div>`);
+    if(sec.note) card.insertAdjacentHTML("beforeend", `<div class="callout" style="border-left-color:var(--accent)">${sec.note}</div>`);
+    let lastGroup = null;
+    for(const it of sec.items){
+      if(it.g && it.g!==lastGroup){ lastGroup = it.g;
+        card.insertAdjacentHTML("beforeend", `<div class="sub-head">${it.g}</div>`); }
+      const st = get(it.id);
+      const row = document.createElement("div");
+      row.className = "item status";
+      row.dataset.s = st.status;
+      row.innerHTML = `
+        <div class="seg">
+          ${STATES.map(v=>`<button data-v="${v}" class="${st.status===v?'on':''}" title="${v}">${SYM[v]}</button>`).join("")}
+        </div>
+        <div class="body">
+          <div class="t"><b>${it.id}</b> · ${it.t}</div>
+          ${it.e?`<div class="e">期望：${it.e}</div>`:""}
+          <button class="note-btn">${st.note?"📝 备注（已填）":"+ 备注"}</button>
+          <textarea class="note ${st.note?'show':''}" placeholder="失败/阻塞时记下：操作步骤 + 期望 + 实际">${st.note||""}</textarea>
+        </div>`;
+      row.querySelectorAll(".seg button").forEach(b=>{
+        b.addEventListener("click", ()=>{
+          const v = b.dataset.v;
+          set(it.id, {status: st.status===v ? "" : v});
+        });
+      });
+      const nb = row.querySelector(".note-btn");
+      const ta = row.querySelector("textarea.note");
+      nb.addEventListener("click", ()=> ta.classList.toggle("show"));
+      ta.addEventListener("input", ()=>{ store[it.id]=Object.assign(get(it.id),{note:ta.value}); save();
+        nb.textContent = ta.value ? "📝 备注（已填）" : "+ 备注"; });
+      card.appendChild(row);
+    }
+    if(sec.callout) card.insertAdjacentHTML("beforeend", `<div class="callout">⚠ ${sec.callout}</div>`);
+    root.appendChild(card);
+  }
+  renderSummary();
+}
+
+function renderSummary(){
+  const items = allItems();
+  const c = {pass:0, fail:0, blocked:0};
+  items.forEach(i=>{ const s=get(i.id).status; if(s) c[s]++; });
+  const total = items.length, untested = total - c.pass - c.fail - c.blocked;
+  const pct = v => (v/total*100).toFixed(2)+"%";
+  document.getElementById("bar").innerHTML =
+    `<i style="width:${pct(c.pass)};background:var(--pass)"></i>`+
+    `<i style="width:${pct(c.fail)};background:var(--fail)"></i>`+
+    `<i style="width:${pct(c.blocked)};background:var(--blocked)"></i>`;
+  document.getElementById("stat").innerHTML =
+    `<span class="dot" style="background:var(--pass)"></span><b>${c.pass}</b> 通过 &nbsp;`+
+    `<span class="dot" style="background:var(--fail)"></span><b>${c.fail}</b> 失败 &nbsp;`+
+    `<span class="dot" style="background:var(--blocked)"></span><b>${c.blocked}</b> 阻塞 &nbsp;·&nbsp; `+
+    `${untested}/${total} 未测`;
+}
+
+// ---- report builders ----
+function metaLines(){
+  return `- 测试人：${meta.tester||"-"} ｜ 日期：${meta.date||"-"} ｜ 构建：${meta.build||"-"} ｜ 环境：${meta.os||"-"}`;
+}
+function buildFailures(){
+  let out = `# 手测 · 未通过项\n${metaLines()}\n`;
+  let any=false;
+  for(const sec of DATA){
+    const rows = sec.items.filter(i=>["fail","blocked"].includes(get(i.id).status));
+    if(!rows.length) continue;
+    any=true; out += `\n## ${sec.title}\n`;
+    for(const it of rows){ const s=get(it.id);
+      out += `- [${s.status==="fail"?"✗ 失败":"⚠ 阻塞"}] ${it.id} ${it.t}\n`;
+      if(s.note) out += `      备注：${s.note.replace(/\n/g," ")}\n`;
+    }
+  }
+  if(!any) out += "\n（没有失败/阻塞项 🎉）\n";
+  return out;
+}
+function buildFull(){
+  const items = allItems(); const c={pass:0,fail:0,blocked:0};
+  items.forEach(i=>{const s=get(i.id).status; if(s)c[s]++;});
+  let out = `# 手测 · 完整报告\n${metaLines()}\n- 统计：✓${c.pass} ✗${c.fail} ⚠${c.blocked} ／ 共${items.length}\n`;
+  for(const sec of DATA){
+    out += `\n## ${sec.title}\n`;
+    for(const it of sec.items){ const s=get(it.id);
+      const mark = s.status?({pass:"✓",fail:"✗",blocked:"⚠"})[s.status]:"·";
+      out += `- [${mark}] ${it.id} ${it.t}\n`;
+      if(s.note) out += `      备注：${s.note.replace(/\n/g," ")}\n`;
+    }
+  }
+  return out;
+}
+
+// ---- dialog / clipboard ----
+const dlg = document.getElementById("dlg");
+function showReport(title, text){
+  document.getElementById("dlg-h").textContent = title;
+  const ta = document.getElementById("dlg-t"); ta.value = text;
+  dlg.showModal();
+}
+document.getElementById("dlg-close").addEventListener("click", ()=>dlg.close());
+document.getElementById("dlg-copy").addEventListener("click", ()=>copy(document.getElementById("dlg-t").value));
+function copy(text){
+  navigator.clipboard?.writeText(text).then(()=>flash("已复制到剪贴板")).catch(()=>{
+    const ta=document.getElementById("dlg-t"); ta.removeAttribute("readonly"); ta.select();
+    document.execCommand("copy"); ta.setAttribute("readonly","");
+  });
+}
+let flashT;
+function flash(msg){ const el=document.getElementById("dlg-copy"); const o=el.textContent; el.textContent=msg;
+  clearTimeout(flashT); flashT=setTimeout(()=>el.textContent=o,1200); }
+
+document.getElementById("btnFail").addEventListener("click", ()=>{ const t=buildFailures(); showReport("未通过项",t); copy(t); });
+document.getElementById("btnAll").addEventListener("click", ()=>{ const t=buildFull(); showReport("完整报告",t); copy(t); });
+document.getElementById("btnReset").addEventListener("click", ()=>{
+  if(confirm("清空所有勾选与备注？")){ store={}; save(); render(); }
+});
+
+render();
+</script>
+</body>
+</html>
