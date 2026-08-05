@@ -7,17 +7,43 @@ import Foundation
 /// that could not represent anything at all are dropped.
 enum ExtractionValidator {
 
+    /// Events and reminders resolve against separate namespaces — the user's
+    /// calendars and their reminder lists are different sets with different
+    /// names — so both maps live here rather than the caller running the
+    /// validator twice over fabricated halves of a response.
     struct Context {
-        /// Calendar display name → `EKCalendar.calendarIdentifier`.
+        /// Display name → `EKCalendar.calendarIdentifier`, for events.
         var calendarsByName: [String: String]
         /// Fallback when the model names a calendar that does not exist.
         var defaultCalendarName: String
+
+        var reminderListsByName: [String: String]
+        var defaultReminderListName: String
+
         var now: Date
 
-        init(calendarsByName: [String: String], defaultCalendarName: String, now: Date = Date()) {
+        init(
+            calendarsByName: [String: String],
+            defaultCalendarName: String,
+            reminderListsByName: [String: String]? = nil,
+            defaultReminderListName: String? = nil,
+            now: Date = Date()
+        ) {
             self.calendarsByName = calendarsByName
             self.defaultCalendarName = defaultCalendarName
+            // Defaulting to the event maps keeps single-namespace setups (and
+            // tests) from having to state everything twice.
+            self.reminderListsByName = reminderListsByName ?? calendarsByName
+            self.defaultReminderListName = defaultReminderListName ?? defaultCalendarName
             self.now = now
+        }
+
+        func names(for kind: DraftItem.Kind) -> [String: String] {
+            kind == .event ? calendarsByName : reminderListsByName
+        }
+
+        func defaultName(for kind: DraftItem.Kind) -> String {
+            kind == .event ? defaultCalendarName : defaultReminderListName
         }
     }
 
@@ -66,7 +92,7 @@ enum ExtractionValidator {
             return .dropped("事件缺少标题")
         }
 
-        let resolved = resolveCalendar(raw.calendar, context: context)
+        let resolved = resolveCalendar(raw.calendar, kind: .event, context: context)
         let start = ISO8601.parse(raw.start)
         var end = ISO8601.parse(raw.end)
 
@@ -114,7 +140,7 @@ enum ExtractionValidator {
             return .dropped("提醒缺少标题")
         }
 
-        let resolved = resolveCalendar(raw.calendar, context: context)
+        let resolved = resolveCalendar(raw.calendar, kind: .reminder, context: context)
         // A reminder with no due date is legitimate — plenty of todos have no
         // deadline — so unlike events this is not flagged.
         let due = ISO8601.parse(raw.due)
@@ -192,17 +218,16 @@ enum ExtractionValidator {
 
     private static func resolveCalendar(
         _ raw: String?,
+        kind: DraftItem.Kind,
         context: Context
     ) -> ResolvedCalendar {
+        let names = context.names(for: kind)
         let name = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !name.isEmpty, let id = context.calendarsByName[name] {
+        if !name.isEmpty, let id = names[name] {
             return ResolvedCalendar(name: name, id: id, matched: true)
         }
-        return ResolvedCalendar(
-            name: context.defaultCalendarName,
-            id: context.calendarsByName[context.defaultCalendarName],
-            matched: false
-        )
+        let fallback = context.defaultName(for: kind)
+        return ResolvedCalendar(name: fallback, id: names[fallback], matched: false)
     }
 
     /// Recovers a usable direction when the model omits it or sends something
