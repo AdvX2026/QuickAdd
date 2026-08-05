@@ -145,6 +145,8 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
 
 静态段约 800–1500 token，天天不变。**调整拼装顺序会打掉缓存，需谨慎。**
 
+约束理由是**首字延迟**而非成本（见 §8.5）。另需保证静态段始终包含 "json" 字样与 schema 示例——这是 `json_object` 模式的硬性要求（见 §8.3）。
+
 ### 5.2 关键规则
 
 **event vs reminder 分流**
@@ -326,7 +328,9 @@ quickadd://event/<session_uuid>?d=past      // 或 d=future
 
 **范围兜底**：`recap_range` 缺失或不合理时，取所有 `direction == past` 条目的 `min(start)` → `max(end)`，各外扩 2 小时。与 LLM 给出的范围取并集。
 
-**截断**：范围 > 3 天 或 候选 > 20 条 → 跳过冲突检测，`conflictStatus = .skipped`，UI 明确提示"本次回记跨度较大，已跳过冲突检查"。跨度大时判定准确率下降且 token 成本上升，与其给一堆不准的建议不如不给。
+**截断**：范围 > 3 天 或 候选 > 20 条 → 跳过冲突检测，`conflictStatus = .skipped`，UI 明确提示"本次回记跨度较大，已跳过冲突检查"。
+
+理由是**判定准确率**与**UI 可用性**：跨度大时 LLM 判断同一性的准确率下降，且一次让用户审阅 20+ 条建议不现实。**不是 token 成本**——在 1M 上下文与当前价格下成本不构成约束（见 §8.5）。
 
 **不合并为单次调用**：大部分 session 是纯规划，第二次调用根本不触发；且把日历事件塞进第一次调用会在静态段之后插入动态内容，**打掉 DeepSeek 的上下文缓存**（见 §5.1）。两次调用职责清晰，第二次失败可干净降级为"全部新建"。
 
@@ -413,15 +417,70 @@ quickadd://event/<session_uuid>?d=past      // 或 d=future
 
 ## 8. 模型接入
 
-**单一 `OpenAICompatibleProvider`**，不为每个模型写独立实现。DeepSeek 使用 OpenAI 兼容的 `/chat/completions`，配置三项即可切换模型：
+**单一 `OpenAICompatibleProvider`**，不为每个模型写独立实现。配置三项即可切换模型：
 
 ```
 baseURL  +  apiKey（Keychain）  +  modelId
 ```
 
-覆盖 DeepSeek / OpenAI / Moonshot / 硅基流动 / OpenRouter / 本地 Ollama。设置页提供若干 preset 一键填充 baseURL。
+代码内拼接 `/chat/completions`。覆盖 DeepSeek / OpenAI / Moonshot / 硅基流动 / OpenRouter / 本地 Ollama。设置页提供 preset 一键填充。
 
-**当前目标模型**：DeepSeek（型号待确认，见 §12）。
+### 8.1 当前目标：DeepSeek
+
+| 项 | 值 |
+|---|---|
+| `baseURL` | `https://api.deepseek.com`（**不带 `/v1`**） |
+| `modelId` | `deepseek-v4-flash` |
+| 合法备选 | `deepseek-v4-pro`（旧 id `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 停用） |
+| 上下文 / 最大输出 | 1M / 384K tokens |
+
+`deepseek-v4-flash` 恒指向最新版本，不带日期后缀（当前为 DeepSeek-V4-Flash-0731）。
+
+### 8.2 Thinking
+
+**默认开启，`reasoning_effort` 默认 `low`，设置中可调（low / high / max）。**
+
+本项目最大的质量风险是中文日期推理（"下周一"、"周五之前"、"聊了一个半小时"），thinking 正对症。抽取任务不需要深度推理，`low` 足以支撑一步日期算术。M2 的冲突语义判定可单独提高档位。
+
+可用 `thinking: {"type": "disabled"}` 关闭。
+
+> ⚠️ **待实测**：thinking 开启时 JSON 落在 `content` 还是被推理内容污染（旧版 reasoner 将推理置于 `reasoning_content`）。首次调用必须打印完整响应体确认，不可假设。
+
+### 8.3 结构化输出：仅 `json_object`
+
+DeepSeek **不支持 `json_schema`**，`response_format.type` 只接受 `text` / `json_object`。因此走「prompt 内嵌 schema + 健壮解析 + 校验层」路线。
+
+四项已知约束及对策：
+
+| 约束 | 对策 |
+|---|---|
+| prompt 必须含 "json" 字样并给出样例，否则可能持续输出空白直至耗尽 token | 静态段已内嵌 schema 示例（§5.3），**列入 prompt checklist 保证不被重构丢失** |
+| 有概率返回空 `content`（官方已知问题） | 触发自动重试（见 §8.4） |
+| `finish_reason == "length"` 时 JSON 被截断 | `max_tokens` 设 8000（thinking 可能占额度）；**显式检查 `finish_reason`**，作为明确失败而非留给解析器报错 |
+| 只保证合法 JSON，不保证字段结构 | 由校验层兜底（§5.4） |
+
+### 8.4 分层解析策略
+
+```
+① JSONDecoder 直接解码                          → 成功则进校验层
+② 失败：剥离 ```json 代码块 / 取首个 { 至末个 }  → 再次解码
+③ 仍失败，或 content 为空，或 finish_reason=length
+   → 自动重试 API 一次（仅一次）
+④ 仍失败 → status = .failed，原文保留，UI 提供手动重试
+```
+
+第 ② 层是廉价保险——即便指定 `json_object`，模型偶尔仍会添加包裹。
+第 ③ 层**严格限制单次重试**，不做指数退避、不做循环重试，避免网络不佳时长时间阻塞用户。
+
+### 8.5 成本
+
+价格（每 1M tokens）：输入缓存命中 `$0.0028` / 未命中 `$0.14`，输出 `$0.28`。
+
+按每日 10 次、每次输入约 1800 token、输出约 800 token 估算，**全部缓存未命中的最坏情况约 $0.14/月**。
+
+> **成本不构成设计约束。** 不得为节省 token 牺牲质量——该开 thinking 就开，该发第二次调用就发，该多带候选事件就带。
+>
+> 缓存命中与未命中相差 50 倍，但绝对值均可忽略；§5.1 的静态段顺序约束**其理由是首字延迟，不是成本**。
 
 ---
 
@@ -487,9 +546,10 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ## 13. 待确认
 
-- [ ] DeepSeek 目标模型的准确 `modelId` 字符串
-- [ ] DeepSeek `baseURL`
-- [ ] 是否支持 `response_format: {"type":"json_schema"}`（可强约束 schema），还是仅 `{"type":"json_object"}` —— 决定 prompt 中 schema 示例的详细程度与解析容错强度
+- [ ] **thinking 开启时的响应结构**：JSON 落在 `content` 还是被推理内容污染。首次调用打印完整响应体确认（见 §8.2）
+- [ ] `reasoning_effort` 的实际档位选择——`low` 是否足以支撑中文日期推理，需用 §11 验收用例实测
+- [ ] §7.2 的截断阈值（3 天 / 20 条）为估计值，待实测调整
+- [ ] §7.5 的 `creationDate` 阈值（+2h / -24h）为估计值，待实测调整
 
 ---
 
