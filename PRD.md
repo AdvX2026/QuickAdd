@@ -24,7 +24,7 @@
 |---|---|
 | **M0** | 文本输入 → LLM 抽取（含日历归类）→ 可编辑草稿卡片 → 按格式规范写入对应日历/提醒列表 → SwiftData 全程留痕。设置页：模型配置、日历语义说明、格式规范 |
 | **M1** | 语音输入：`SpeechAnalyzer` + `SpeechTranscriber` 实时转写、文字上推动画、修改/发送 |
-| **M2** | 冲突检测：Swift 粗筛 + LLM 精判 + 合并/替换/删除 UI |
+| **M2** | 冲突检测：按回记范围粗筛 + LLM 精判 + 来源约束 + 合并/标记未执行 UI（见 §7） |
 | **M3** | `clarifications` 追问、Action 按钮 App Intent、Share Extension |
 
 **为什么 M0 不含语音**：抽取质量决定这个 App 成不成立。先用文本把 prompt 调稳，避免"到底是转写错了还是理解错了"的调试地狱。
@@ -48,17 +48,17 @@
 
 LLM 输出**日历名称字符串**，不输出 `calendarIdentifier`——UUID 类字符串 LLM 抄错率高。名称到 identifier 的映射在 Swift 侧完成。
 
-### 3.3 冲突的三种类型（M2）
+### 3.3 事件来源（origin）
 
-| 类型 | 场景 | 处理 |
-|---|---|---|
-| **A. 同一件事的两个副本** | 计划「周三 15:00 和张三开会」，实际开了，回记「周三下午和张三聊了两小时」 | 建议**更新原事件**（时间改为实际值，附注补充），而非新建 |
-| **B. 幽灵计划** | 计划「周三 15:00 健身」，没去；回记「周三下午在家躺着」 | 提示冲突，询问是否删除或标记未完成 |
-| **C. 时间重叠但不同事** | 计划「15:00 开会」，回记「15:00–16:00 写代码」 | 仅提示，**不建议任何自动动作** |
+已有日历事件在冲突处理中必须先判定来源。详见 §7。
 
-判定核心是"是否同一件事"，纯时间比对无法解决（计划 15:00、实际 15:30 开始，时间对不上），必须语义判断。
+| 来源 | 判定依据 |
+|---|---|
+| `plan` | 识别号存在且 `d=future`；或用户手动标注为计划 |
+| `recap` | 识别号存在且 `d=past`；或用户手动标注为回记 |
+| `unknown` | 无识别号且无标注 |
 
-**硬底线**：LLM 只产出建议，所有对已有日历数据的修改/删除必须经用户在 UI 上显式确认。绝不自动删除。
+**用户会在日历 App 中手动创建回记**，因此「无识别号的过去事件」不能推定为计划。
 
 ---
 
@@ -76,6 +76,10 @@ CaptureSession
   modelId: String?                    // 本次使用的模型
   errorMessage: String?
   items: [DraftItem]
+  // —— M2 ——
+  recapRange: DateInterval?           // 本次回记覆盖的时间范围
+  conflictStatus: .notApplicable | .pending | .resolved | .skipped | .failed
+  proposals: [ConflictProposal]
 
 DraftItem
   id: UUID
@@ -94,6 +98,23 @@ DraftItem
   confirmReason: String?
   isSelected: Bool
   committedIdentifier: String?        // EKEvent/EKReminder identifier，幂等依据
+
+// —— M2 ——
+ConflictProposal
+  id: UUID
+  targetEventIdentifier: String       // 已有事件的 EKEvent.eventIdentifier
+  targetSnapshot: String              // 标题+时间快照，执行前比对，防外部并发修改
+  origin: .plan | .recap | .unknown   // 见 §3.3
+  action: .merge | .markMissed | .delete | .keep
+  reason: String                      // LLM 给出的理由，必填，直接展示给用户
+  linkedDraftItemID: UUID?            // merge 时指向哪条回记
+  isAccepted: Bool                    // 用户是否勾选
+  appliedAt: Date?
+
+EventOriginTag                        // 用户手动标注的来源，零侵入本地表
+  eventIdentifier: String             // 主键
+  origin: .plan | .recap
+  taggedAt: Date
 ```
 
 **铁律**：`rawText` 必须在调用 LLM **之前**落盘（`status = .draft`）。这是"不能丢记录"的唯一实现点。崩溃、断网、API 报错均不丢原始输入。
@@ -170,9 +191,15 @@ DraftItem
       "direction": "future"
     }
   ],
+  "recap_range": {
+    "start": "2026-08-05T00:00:00+08:00",
+    "end":   "2026-08-05T23:59:59+08:00"
+  },
   "clarifications": []
 }
 ```
+
+`recap_range` 是本次回记覆盖的时间范围，供 M2 冲突检测粗筛使用（见 §7.2）。无 `past` 条目时为 `null`。LLM 抽取时本就理解了"今天""这个周末"，顺带输出，边际成本接近零。
 
 `clarifications` **从第一版就保留在 schema 中**（M0 恒为空数组），M3 启用时是纯增量改动。其结构：
 
@@ -232,17 +259,146 @@ DraftItem
 支持占位符：`{details}` `{app_version}` `{timestamp}` `{model}` `{session_id}`。
 `{app_version}` 从 `CFBundleShortVersionString` 读取，不硬编码。
 
-**溯源 URL**：同时写入 `EKEvent.url = quickadd://session/<uuid>`。一个字段解决三件事：
+**溯源识别号**：写入 `EKEvent.url`，格式为：
+
+```
+quickadd://event/<session_uuid>?d=past      // 或 d=future
+```
+
+**`direction` 直接编码在 URL 中，不依赖本地数据库反查。** 这样重装 App 或更换设备后，日历里的历史事件依然自带来源信息——对一个档案型应用，这点很重要。
+
+一个字段解决四件事：
 
 1. **幂等** — 重复提交时可靠识别已创建项
-2. **冲突检测（M2）** — 区分"QuickAdd 创建"与"其他来源"，两者处理策略不同
+2. **来源判定（M2）** — 区分 `plan` / `recap` / `unknown`，三者可执行的动作不同（见 §7.1）
 3. **反向跳转** — 从日历点回 QuickAdd 查看原始记录
+4. **跨设备存活** — 不依赖 SwiftData 数据完整性
 
-附注中的 `{session_id}` 作为 url 字段不同步时的兜底。
+**双写双读**：附注中的 `{session_id}` 作为兜底。读取时先取 `EKEvent.url`，取不到再正则扫 `notes`——应对 Exchange / Google 等日历源不同步 `url` 字段的情况。
 
 ---
 
-## 7. 模型接入
+## 7. 冲突处理（M2）
+
+回记与已有日程冲突的处理。这是本项目复杂度最高的模块，独立于 M0/M1。
+
+### 7.1 三类冲突与来源约束
+
+| 类型 | 场景 | 处理 |
+|---|---|---|
+| **A. 同一件事的两个副本** | 计划「周三 15:00 和张三开会」，实际开了，回记「周三下午和张三聊了两小时」 | 建议 `merge`：更新原事件时间/附注，不新建 |
+| **B. 幽灵计划** | 计划「周三 15:00 健身」，没去；回记「周三下午在家躺着」 | 建议 `markMissed` |
+| **C. 时间重叠但不同事** | 计划「15:00 开会」，回记「15:00–16:00 写代码」 | 仅提示，不建议动作 |
+
+判定核心是"是否同一件事"，纯时间比对无法解决（计划 15:00、实际 15:30 开始，时间根本对不上），必须语义判断。
+
+**动作白名单由 origin 决定，在 Swift 侧强制过滤——LLM 越权的建议直接丢弃：**
+
+| origin | 允许的动作 |
+|---|---|
+| `plan` | `merge` / `markMissed` / `delete` |
+| `recap` | **仅 `merge`**（去重）。已有回记记录的是真实发生过的事，不得标记未执行或删除 |
+| `unknown` | **仅 `merge`** |
+
+**为什么 `unknown` 只能 merge——错误代价不对称：**
+
+- 把手动回记误判为计划 → 给真实发生过的事打上「未执行」标记 → **污染档案，伤害大**
+- 把计划误判为手动回记 → 漏报一条幽灵计划 → **只是少提醒一次，代价小**
+
+因此来源不确定时宁可漏报，绝不误标。
+
+### 7.2 粗筛：按范围，不按条目
+
+**不能逐条按 ±N 小时窗口粗筛。** 幽灵计划的定义就是"日历上有、回记里没提"，逐条粗筛以回记条目为锚点，结构上永远扫不到它。
+
+正确做法以**时间段**为锚点：
+
+```
+① 第一次 LLM 调用：抽取，产出 items + recap_range
+      ↓
+② Swift 粗筛：拉取 recap_range 内全部已有事件，逐条判定 origin
+   → 无候选则 conflictStatus = .notApplicable，流程结束
+      ↓
+③ 第二次 LLM 调用：带候选清单，产出 proposals
+      ↓
+④ Swift 过滤越权建议（§7.1 白名单）→ UI 呈现 → 用户逐条确认 → 执行
+```
+
+**范围兜底**：`recap_range` 缺失或不合理时，取所有 `direction == past` 条目的 `min(start)` → `max(end)`，各外扩 2 小时。与 LLM 给出的范围取并集。
+
+**截断**：范围 > 3 天 或 候选 > 20 条 → 跳过冲突检测，`conflictStatus = .skipped`，UI 明确提示"本次回记跨度较大，已跳过冲突检查"。跨度大时判定准确率下降且 token 成本上升，与其给一堆不准的建议不如不给。
+
+**不合并为单次调用**：大部分 session 是纯规划，第二次调用根本不触发；且把日历事件塞进第一次调用会在静态段之后插入动态内容，**打掉 DeepSeek 的上下文缓存**（见 §5.1）。两次调用职责清晰，第二次失败可干净降级为"全部新建"。
+
+### 7.3 候选事件的引用方式
+
+传给 LLM 的候选事件编短序号 `#1 #2 #3`，**LLM 引用序号，不引用 `eventIdentifier`**。Swift 侧映射回真实 identifier，序号越界直接丢弃该条建议。
+
+与"日历用名称不用 identifier"（§3.2）同一原则：让 LLM 复述 UUID 是在邀请它幻觉。
+
+不设 `confidence` 字段——LLM 自评置信度不可靠，`reason` 已足够支撑用户判断。
+
+### 7.4 幽灵计划：标记，不删除
+
+**`delete` 必须被强烈抑制，这条写进系统提示词。**
+
+日历在本项目中是档案。「计划了健身但没去」本身就是真实历史，删掉等于篡改。半年后回看，"这周计划三次健身一次没去"是有价值的信息。
+
+- `markMissed` 的实现：**标题加前缀 emoji**（如 `🚫 🏋️ 健身`）。日历月/周视图中一眼可辨，完全可逆（去前缀即可），前缀符号在设置中可改
+- `delete` 只保留给"这条计划本身是错的 / 重复的"，**默认不勾选且需二次确认**
+- 系统提示词须明确：**不得因"未执行"而建议删除**
+
+### 7.5 降低 `unknown` 占比
+
+**① `creationDate` 启发式——只做 UI 提示，不进判定**
+
+`EKCalendarItem.creationDate` 是个强信号：手动回记必然事后创建（`creationDate > startDate`），手动规划必然事前创建。
+
+但**不用它解锁 `delete` / `markMissed` 权限**——那会把 §7.1 的不对称风险放回来。只用于生成提示文案，由用户一秒钟点确认：
+
+```
+⚠️ 「和老王吃饭」 昨天 19:00 生活 · 来源未知
+   （创建于事件结束后 3 小时，看起来是手动补记）
+   [ 这是计划 ]  [ 这是我手动记的 ]  [ 忽略 ]
+```
+
+**② 一键标注，写入本地 `EventOriginTag` 表**
+
+用户点选后记住，下次同一事件不再询问。
+
+**存本地表，不写回日历事件**：用户手动创建的事件，QuickAdd 不应擅自修改其 `notes` / `url`。代价是不跨设备同步，但 `eventIdentifier` 本身跨设备就不稳定，同步了也未必对得上。
+
+### 7.6 执行期的并发保护
+
+从生成建议到用户点确认之间，事件可能被其他设备修改。执行前比对 `targetSnapshot`（标题 + 时间），不一致则跳过该条并提示"这条日程已被修改，请重新检查"。
+
+**硬底线**：LLM 只产出建议，所有对已有日历数据的修改/删除必须经用户在 UI 上显式确认。任何情况下都不自动删除。
+
+### 7.7 UI 呈现
+
+草稿审阅页分两段，冲突段仅在有建议时出现：
+
+```
+【将要添加】
+  📊 过 Q3 方案      今天 10:00–11:30   工作
+  🦷 牙齿检查        今天 15:00         个人
+
+【与已有日程的冲突】                        [全部忽略]
+  ⚠️ 「与张三开会」  今天 15:00–16:00  工作 · 计划
+     合并 —— 回记中「和张三聊了两小时」与这条指向同一场会议，
+             实际结束时间比计划晚一小时
+     [✓ 合并并更新时间]   [新建为独立事件]   [忽略]
+
+  ⚠️ 「健身」        今天 18:00        生活 · 计划
+     标记未执行 —— 回记完整覆盖 18:00–21:00 且未提及健身
+     [ 标记未执行 ]   [ 删除 ]   [✓ 保持不变]
+```
+
+原则：`reason` 必须以人话展示；删除永不是默认选项；提供「全部忽略」一键跳过。
+
+---
+
+## 8. 模型接入
 
 **单一 `OpenAICompatibleProvider`**，不为每个模型写独立实现。DeepSeek 使用 OpenAI 兼容的 `/chat/completions`，配置三项即可切换模型：
 
@@ -256,7 +412,7 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ---
 
-## 8. 权限
+## 9. 权限
 
 | 权限 | API | 请求时机 |
 |---|---|---|
@@ -268,7 +424,7 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ---
 
-## 9. 界面
+## 10. 界面
 
 **主屏**：中部欢迎语/提示语，底部 Liquid Glass 输入条。M0 只有文本输入 + 发送，但**布局按最终形态预留语音按钮位置**，M1 直接填入。
 
@@ -284,7 +440,7 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ---
 
-## 10. M0 验收标准
+## 11. M0 验收标准
 
 输入：
 
@@ -305,7 +461,7 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ---
 
-## 11. 明确不做
+## 12. 明确不做
 
 - 读取「语音备忘录」App 的录音 —— **技术上不可行**，其数据位于私有容器，无公开 API 或 entitlement
 - 重复事件（RRULE）
@@ -316,16 +472,15 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 ---
 
-## 12. 待确认
+## 13. 待确认
 
 - [ ] DeepSeek 目标模型的准确 `modelId` 字符串
 - [ ] DeepSeek `baseURL`
 - [ ] 是否支持 `response_format: {"type":"json_schema"}`（可强约束 schema），还是仅 `{"type":"json_object"}` —— 决定 prompt 中 schema 示例的详细程度与解析容错强度
-- [ ] M2 冲突判定为"同一件事"时的默认动作：合并更新原事件 / 保留两条 / 每次询问
 
 ---
 
-## 13. 测试策略
+## 14. 测试策略
 
 按 `AGENTS.md` 的 **lightweight tool** profile，不建重型测试架子。两处例外必须有单元测试：
 
