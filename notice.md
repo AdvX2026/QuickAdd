@@ -44,7 +44,37 @@ API Key 有两个来源，都不进版本库：
 swift Spike/deepseek-probe.swift --no-thinking
 ```
 
-用途：改提示词后快速验证抽取质量，不用起 App。日历定义硬编码在脚本的 `staticPrompt` 里，与 App 的设置页是两套，**调完要手动同步到 `PromptBuilder`**。详见 `Spike/README.md`。
+用途：改提示词后快速验证抽取质量，不用起 App。脚本的提示词逐节镜像 `PromptBuilder`，**两边结构必须保持一致**——结构漂了，spike 就预测不了 App 行为，也就失去意义。
+
+### 日历定义存在三个地方
+
+| 位置 | 角色 |
+|---|---|
+| `Spike/deepseek-probe.swift` 顶部 `eventCalendars` | **经过验证的版本，事实来源** |
+| App 设置页（UserDefaults） | 运行时实际使用的版本，需人工从上面抄 |
+| `PromptBuilder.calendarSection()` | 只负责渲染，不含定义本身 |
+
+改定义的流程：先在 spike 里改并跑几次验证 → 验稳了抄进 App 设置。反向同步（读出 App 里的真实配置）：
+
+```bash
+plutil -p ~/Library/Developer/CoreSimulator/Devices/*/data/Containers/Data/\
+Application/*/Library/Preferences/cn.Teethe.QuickAdd.plist
+```
+
+### 定义的写法：给判定标准，不要只举例
+
+这是踩过的坑。早期版本里「工作」只列了三个例子、「创意」以「任何创意类」开头，结果例子之外的工作内容全被创意吸走，`过 Q3 方案` 三次只对一次。
+
+改成每条都带一句可执行的判断后（如「有没有他人在等这件事的结果」「在输入还是在产出」），9 次运行归类完全一致。写新定义时照这个格式。
+
+### 已测基线（2026-08-06，`deepseek-v4-flash`，thinking 关闭）
+
+- 延迟 3.1–4.1s，单次约 $0.0002
+- 归类稳定性 9/9
+- **抽取完整性 8/9** —— 约 1/9 的概率会漏抽一个条目。这比归类错更隐蔽，用户不会知道自己漏了什么。目前无对策，出现时不要当成新 bug
+- 深夜使用时「今天上午」存在歧义：凌晨 2 点说「今天上午十点做了X」，模型可能理解为前一天
+
+详见 `Spike/README.md`。
 
 ## 代码地图
 
