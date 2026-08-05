@@ -121,6 +121,13 @@ let staticPrompt = """
 - past：用户在叙述已经做过的事（回记）
 - future：用户在叙述打算做的事（规划）
 
+## 二之二、时间推算规则
+
+- 「X 之前」「X 前」这类截止表述：截止时间取 X 当天的 23:59，不得晚于 X 当天
+- 用户没有说明时长的事件：默认时长 1 小时
+- 用户只给了模糊时段（例如「晚上」「下午」）：仍要给出具体时间，并把该条的 timeVague 设为 true
+- 时间明确的条目，timeVague 设为 false
+
 ## 三、日历分类 calendar
 
 必须从下列名称中选择一个，不得自创：
@@ -148,7 +155,8 @@ json 结构如下：
       "start": "2026-08-05T10:00:00+08:00",
       "end": "2026-08-05T11:30:00+08:00",
       "allDay": false,
-      "direction": "past"
+      "direction": "past",
+      "timeVague": false
     }
   ],
   "reminders": [
@@ -158,7 +166,8 @@ json 结构如下：
       "details": "",
       "calendar": "工作",
       "due": "2026-08-06T18:00:00+08:00",
-      "direction": "future"
+      "direction": "future",
+      "timeVague": false
     }
   ],
   "recap_range": {
@@ -177,7 +186,8 @@ json 结构如下：
 - allDay：是否为全天事件
 - due：提醒的截止时间，ISO8601 带时区偏移；没有截止时间则为 null
 - direction："past" 或 "future"
-- recap_range：所有 direction 为 past 的条目所覆盖的时间范围；没有 past 条目时为 null
+- timeVague：时间是你根据模糊表述推测的则为 true，用户明确说了时间则为 false
+- recap_range：用户这段叙述所谈论的时间范围。取决于叙述本身覆盖的时段，而不是抽取出的条目的时间跨度——例如用户在讲「今天」做了什么，范围就是今天整天。没有 past 条目时为 null
 
 ## 五、禁止
 
@@ -209,8 +219,11 @@ let apiKey = loadAPIKey()
 
 var body: [String: Any] = [
     "model": modelID,
+    // Static block is its own message so it is byte-identical across calls,
+    // giving the context cache a chance to match on it.
     "messages": [
-        ["role": "system", "content": staticPrompt + "\n\n" + dynamicPrompt],
+        ["role": "system", "content": staticPrompt],
+        ["role": "system", "content": dynamicPrompt],
         ["role": "user", "content": userInput],
     ],
     "response_format": ["type": "json_object"],
@@ -372,18 +385,20 @@ let reminders = parsed["reminders"] as? [[String: Any]] ?? []
 print("\n─── events (\(events.count)) ─────────────────────────────────────")
 for e in events {
     let dir = (e["direction"] as? String ?? "?") == "past" ? "回记" : "规划"
+    let vague = (e["timeVague"] as? Bool ?? false) ? "  ⚠️时间为推测" : ""
     print("""
       \(e["emoji"] as? String ?? "  ") \(e["title"] as? String ?? "?")
-         \(fmt(e["start"])) → \(fmt(e["end"]))   [\(e["calendar"] as? String ?? "?")] \(dir)
+         \(fmt(e["start"])) → \(fmt(e["end"]))   [\(e["calendar"] as? String ?? "?")] \(dir)\(vague)
     """)
 }
 
 print("\n─── reminders (\(reminders.count)) ──────────────────────────────")
 for r in reminders {
     let dir = (r["direction"] as? String ?? "?") == "past" ? "回记" : "规划"
+    let vague = (r["timeVague"] as? Bool ?? false) ? "  ⚠️时间为推测" : ""
     print("""
       \(r["emoji"] as? String ?? "  ") \(r["title"] as? String ?? "?")
-         截止 \(fmt(r["due"]))   [\(r["calendar"] as? String ?? "?")] \(dir)
+         截止 \(fmt(r["due"]))   [\(r["calendar"] as? String ?? "?")] \(dir)\(vague)
     """)
 }
 

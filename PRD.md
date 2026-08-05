@@ -96,6 +96,7 @@ DraftItem
   direction: .past | .future
   needsConfirmation: Bool
   confirmReason: String?
+  timeVague: Bool                     // 模型自报时间为推测值，见 §5.3
   isSelected: Bool
   committedIdentifier: String?        // EKEvent/EKReminder identifier，幂等依据
 
@@ -127,25 +128,30 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
 
 按此顺序拼装，以最大化 DeepSeek 的上下文缓存命中率：
 
+**静态段与动态段必须是两条独立的 `message`**，不可拼接为单条：
+
 ```
-① 静态段（每次完全一致，吃缓存）
+messages[0]  system  静态段（每次字节级一致）
    - 角色限定：只做日程/提醒抽取，不闲聊、不给建议、不做全能助手
    - event / reminder 分流规则
    - direction 判定规则
+   - 时间推算规则（§5.2）
    - 日历语义说明（来自设置，含边界反例）
    - 格式规范说明（emoji、details 写法）
    - JSON schema 定义与示例
    - 禁止项
 
-② 动态段
+messages[1]  system  动态段
    - 当前时间（ISO8601）、时区、星期几、本周一日期
 
-③ 用户输入
+messages[2]  user    用户输入
 ```
 
-静态段约 800–1500 token，天天不变。**调整拼装顺序会打掉缓存，需谨慎。**
+**实测**：拼接为单条 system message 时缓存命中恒为 0（动态时间使整条 message 每次不同）；拆为独立 message 后命中 896/1018 tokens。DeepSeek 的上下文缓存按 message 边界匹配。
 
-约束理由是**首字延迟**而非成本（见 §8.5）。另需保证静态段始终包含 "json" 字样与 schema 示例——这是 `json_object` 模式的硬性要求（见 §8.3）。
+> 但**不要为保护缓存扭曲设计**。实测静态段约 900 token，缓存命中省下约 $0.0001/次，延迟差异落在噪声范围内（3.8s vs 4.1s）。拆分本身零成本，照做即可；若将来有充分理由改变结构，不必为缓存让路。
+
+静态段**必须始终包含 "json" 字样与 schema 示例**——这是 `json_object` 模式的硬性要求（见 §8.3），且是唯一真正不可动摇的约束。
 
 ### 5.2 关键规则
 
@@ -156,6 +162,14 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
 **direction 判定**
 - 过去时态叙述、已完成语气 → `past`
 - 未来意图、计划语气 → `future`
+
+**时间推算规则**（每条均由实测缺陷倒推得出，缺一会引入抖动）
+
+| 规则 | 解决的实测问题 |
+|---|---|
+| 「X 之前」类截止表述 → 取 X 当天 23:59，不得晚于 X 当天 | 3 次运行中 1 次把「周五之前」算成周六 |
+| 未说明时长的事件 → 默认 1 小时 | 「牙齿检查」结束时间在 15:30 / 16:00 间抖动 |
+| 只给模糊时段（「晚上」「下午」）→ 仍输出具体时间，但 `timeVague = true` | 模型会把「晚上」具体化为 20:00，用户无从察觉这是推测值 |
 
 **禁止项**
 - 禁止输出相对时间词（"明天"、"下周"），一律 ISO8601 带时区偏移
@@ -180,7 +194,8 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
       "start": "2026-08-05T10:00:00+08:00",
       "end":   "2026-08-05T11:30:00+08:00",
       "allDay": false,
-      "direction": "past"
+      "direction": "past",
+      "timeVague": false
     }
   ],
   "reminders": [
@@ -190,7 +205,8 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
       "details": "",
       "calendar": "工作",
       "due": "2026-08-06T18:00:00+08:00",
-      "direction": "future"
+      "direction": "future",
+      "timeVague": false
     }
   ],
   "recap_range": {
@@ -201,7 +217,11 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
 }
 ```
 
-`recap_range` 是本次回记覆盖的时间范围，供 M2 冲突检测粗筛使用（见 §7.2）。无 `past` 条目时为 `null`。LLM 抽取时本就理解了"今天""这个周末"，顺带输出，边际成本接近零。
+`timeVague` 由模型自报"这个时间是我猜的"，直接映射到校验层的 `needsConfirmation`（见 §5.4）。实测中它精确命中——六条结果里只有「晚上写小说」被标记，其余全为 `false`。
+
+`recap_range` 是本次回记覆盖的时间范围，供 M2 冲突检测粗筛使用（见 §7.2）。无 `past` 条目时为 `null`。
+
+> ⚠️ **语义必须是"叙述所谈论的时段"，不是"抽取出的条目的时间跨度"。** 早期措辞导致模型返回 `10:00–15:30`（恰好是两条 past 条目的区间），而幽灵计划的定义就是"日历上有、回记里没提"——范围塌缩到已提及的条目上，正好把要找的东西排除在外。改成"用户在讲今天，范围就是今天整天"后，三次运行稳定返回全天。
 
 `clarifications` **从第一版就保留在 schema 中**（M0 恒为空数组），M3 启用时是纯增量改动。其结构：
 
@@ -218,6 +238,7 @@ EventOriginTag                        // 用户手动标注的来源，零侵入
 | `direction=past` 但时间在未来（或反之） | 标 `needsConfirmation` |
 | 时间超出 `now ± 1 年` | 标 `needsConfirmation` |
 | `end < start` | 自动修正为 `start + 1h` + 标 `needsConfirmation` |
+| `timeVague == true` | 标 `needsConfirmation`，原因写「时间为推测」 |
 | `title` 为空 | 丢弃该条 |
 
 **校验失败一律不报错**，只把卡片标黄让用户点一下改。
@@ -436,15 +457,26 @@ baseURL  +  apiKey（Keychain）  +  modelId
 
 `deepseek-v4-flash` 恒指向最新版本，不带日期后缀（当前为 DeepSeek-V4-Flash-0731）。
 
-### 8.2 Thinking
+### 8.2 Thinking：默认关闭
 
-**默认开启，`reasoning_effort` 默认 `low`，设置中可调（low / high / max）。**
+**发送 `thinking: {"type": "disabled"}`。** 设置中保留开关，默认关。
 
-本项目最大的质量风险是中文日期推理（"下周一"、"周五之前"、"聊了一个半小时"），thinking 正对症。抽取任务不需要深度推理，`low` 足以支撑一步日期算术。M2 的冲突语义判定可单独提高档位。
+此结论来自实测（2026-08-06，`deepseek-v4-flash`，PRD §11 验收用例）：
 
-可用 `thinking: {"type": "disabled"}` 关闭。
+| | 延迟 | completion_tokens | 抽取结果 |
+|---|---|---|---|
+| thinking 开启（effort=low） | **38.5s** | 3370（其中 reasoning 2838） | 3 events / 3 reminders，分类错 1 条 |
+| thinking 关闭 | **3.1–4.1s** | 530–660 | 4 events / 2 reminders，3/3 次全对 |
 
-> ⚠️ **待实测**：thinking 开启时 JSON 落在 `content` 还是被推理内容污染（旧版 reasoner 将推理置于 `reasoning_content`）。首次调用必须打印完整响应体确认，不可假设。
+> **原判断有误，此处修正。** §8.2 此前主张"中文日期推理是核心质量风险，thinking 正对症"。实测表明该模型的基础能力已足以处理「下周一」「一个半小时」这类推算——两种模式的日期算术都正确。thinking 只买来 10 倍延迟，且在本任务上分类反而更差（过度推理偏离了简单抽取目标）。
+>
+> 对一个"说完话就要看到结果"的应用，38 秒不可接受。
+
+**响应结构（已实测确认）**：thinking 开启时 `message` 返回 `content` + `reasoning_content` 两个字段，**JSON 干净地落在 `content` 中，不被推理内容污染**。§8.4 的第二层剥壳因此确认为"廉价保险"而非必需——五次调用中第一层直接解码全部成功。
+
+thinking token 计入 `completion_tokens`，因此也占用 `max_tokens` 额度。
+
+`reasoning_effort` 仅在 thinking 开启时有意义；关闭后无需设置。
 
 ### 8.3 结构化输出：仅 `json_object`
 
@@ -476,7 +508,9 @@ DeepSeek **不支持 `json_schema`**，`response_format.type` 只接受 `text` /
 
 价格（每 1M tokens）：输入缓存命中 `$0.0028` / 未命中 `$0.14`，输出 `$0.28`。
 
-按每日 10 次、每次输入约 1800 token、输出约 800 token 估算，**全部缓存未命中的最坏情况约 $0.14/月**。
+**实测**（thinking 关闭，§11 用例）：`prompt_tokens` 1018（缓存命中 896 / 未命中 122），`completion_tokens` 约 640 → **单次约 $0.0002**。按每日 10 次计，**约 $0.06/月**。
+
+即便开启 thinking（`completion_tokens` 涨到 3370），也仅约 $0.28/月。
 
 > **成本不构成设计约束。** 不得为节省 token 牺牲质量——该开 thinking 就开，该发第二次调用就发，该多带候选事件就带。
 >
@@ -546,10 +580,16 @@ DeepSeek **不支持 `json_schema`**，`response_format.type` 只接受 `text` /
 
 ## 13. 待确认
 
-- [ ] **thinking 开启时的响应结构**：JSON 落在 `content` 还是被推理内容污染。首次调用打印完整响应体确认（见 §8.2）
-- [ ] `reasoning_effort` 的实际档位选择——`low` 是否足以支撑中文日期推理，需用 §11 验收用例实测
 - [ ] §7.2 的截断阈值（3 天 / 20 条）为估计值，待实测调整
 - [ ] §7.5 的 `creationDate` 阈值（+2h / -24h）为估计值，待实测调整
+- [ ] 语音转写接入后需复测抽取质量——转写噪声（同音字、标点缺失）对抽取的影响未知
+
+**已由 spike 解决**（2026-08-06，见 `Spike/`）：
+
+- ~~thinking 开启时的响应结构~~ → `content` + `reasoning_content` 双字段，JSON 干净（§8.2）
+- ~~`reasoning_effort` 档位~~ → thinking 默认关闭，该参数不再适用（§8.2）
+- ~~`deepseek-v4-flash` 中文日期推理能力~~ → 足够；「下周一」「一个半小时」6 次运行全部正确
+- ~~`json_object` 稳定性~~ → 8 次调用第一层直接解码全部成功，无空响应、无截断
 
 ---
 
