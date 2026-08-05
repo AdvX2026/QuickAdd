@@ -26,3 +26,15 @@ DerivedData/
 
 # CocoaPods (uncomment if you use CocoaPods)
 # Pods/
+
+# Secrets — never commit API keys or credentials
+.env
+.env.*
+secrets/
+*.key
+*.pem
+*.p12
+*.mobileprovision
+
+# Spike output — raw API responses may echo prompt content
+Spike/out/
