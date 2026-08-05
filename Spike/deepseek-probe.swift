@@ -100,11 +100,90 @@ let weekdayNames = ["星期日", "星期一", "星期二", "星期三", "星期�
 let todayWeekday = weekdayNames[cal.component(.weekday, from: now) - 1]
 let thisMonday = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now))!
 
+// MARK: - Calendar configuration
+//
+// Mirrors what the app has in Settings. Keeping these in sync is what makes a
+// spike run predictive of app behaviour — if the lists diverge, tuning the
+// prompt here tells you nothing about what the app will do.
+//
+// Read the app's real values with:
+//   plutil -p ~/Library/Developer/CoreSimulator/Devices/*/data/Containers/Data/\
+//   Application/*/Library/Preferences/cn.Teethe.QuickAdd.plist
+
+let eventCalendars: [(title: String, definition: String)] = [
+    ("创意", "创意：任何创意类，比如艺术、和工作的区别是这个是为了提升自身能力。"),
+    ("工作", "工作：比如写合同、甲方对接、开会。"),
+    ("生活", "生活：散步、吃吃喝喝、休息。面向个人，并且不是提升类的，而是为了身心放松。"),
+    ("Calendar", "默认，拿不准就放这。"),
+]
+let defaultEventCalendar = "Calendar"
+
+let reminderLists: [(title: String, definition: String)] = [
+    ("提醒事项", ""),
+]
+let defaultReminderList = "提醒事项"
+
 // MARK: - Prompt
 //
-// Chinese, because the input is Chinese and DeepSeek handles the pairing
-// better that way. Order follows PRD §5.1: static block first so the
-// context cache can hit, dynamic block after.
+// Assembled the same way PromptBuilder does, section for section, so that what
+// this script sends is what the app sends. Chinese because the input is Chinese
+// and DeepSeek pairs better that way. Order follows PRD §5.1: static block
+// first so the context cache can hit, dynamic block after.
+
+func renderList(_ configs: [(title: String, definition: String)]) -> String {
+    configs.map { config in
+        let definition = config.definition.trimmingCharacters(in: .whitespacesAndNewlines)
+        return definition.isEmpty ? "- \(config.title)" : "- \(config.title)：\(definition)"
+    }
+    .joined(separator: "\n")
+}
+
+let calendarSection = """
+事件（events）的 calendar 必须从下列名称中选择一个，不得自创：
+
+\(renderList(eventCalendars))
+
+实在无法判断时使用「\(defaultEventCalendar)」。
+
+提醒（reminders）的 calendar 必须从下列名称中选择一个，不得自创：
+
+\(renderList(reminderLists))
+
+实在无法判断时使用「\(defaultReminderList)」。
+"""
+
+let schemaExample = """
+{
+  "events": [
+    {
+      "title": "过 Q3 方案",
+      "emoji": "📊",
+      "details": "与张三讨论 Q3 方案细节",
+      "calendar": "\(eventCalendars.first?.title ?? "默认")",
+      "start": "2026-08-05T10:00:00+08:00",
+      "end": "2026-08-05T11:30:00+08:00",
+      "allDay": false,
+      "direction": "past",
+      "timeVague": false
+    }
+  ],
+  "reminders": [
+    {
+      "title": "交周报",
+      "emoji": "📝",
+      "details": "",
+      "calendar": "\(reminderLists.first?.title ?? "默认")",
+      "due": "2026-08-06T18:00:00+08:00",
+      "direction": "future",
+      "timeVague": false
+    }
+  ],
+  "recap_range": {
+    "start": "2026-08-05T00:00:00+08:00",
+    "end": "2026-08-05T23:59:59+08:00"
+  }
+}
+"""
 
 let staticPrompt = """
 你是一个日程抽取器。你唯一的职责，是把用户的自然语言叙述转成日历事件与提醒事项的结构化 json 数据。
@@ -121,67 +200,31 @@ let staticPrompt = """
 - past：用户在叙述已经做过的事（回记）
 - future：用户在叙述打算做的事（规划）
 
-## 二之二、时间推算规则
+## 三、时间推算规则
 
 - 「X 之前」「X 前」这类截止表述：截止时间取 X 当天的 23:59，不得晚于 X 当天
 - 用户没有说明时长的事件：默认时长 1 小时
 - 用户只给了模糊时段（例如「晚上」「下午」）：仍要给出具体时间，并把该条的 timeVague 设为 true
 - 时间明确的条目，timeVague 设为 false
 
-## 三、日历分类 calendar
+## 四、归类 calendar
 
-必须从下列名称中选择一个，不得自创：
+\(calendarSection)
 
-- 创意：写作、设计、副业项目、灵感记录。不包括工作范围内的创意任务（那属于 工作）
-- 工作：本职工作的会议、任务、汇报、出差。不包括工作场合的私人社交（那属于 生活）
-- 生活：日常起居、社交、聚会、家务、购物、出行安排。不包括个人健康与理财（那属于 个人）
-- 个人：健康就医、健身、理财、证件办理、个人成长与学习。不包括和朋友一起的活动（那属于 生活）
-
-实在无法判断时使用「生活」。
-
-## 四、输出格式
+## 五、输出格式
 
 必须输出合法的 json。不要输出 json 以外的任何文字，不要用 markdown 代码块包裹。
 
 json 结构如下：
 
-{
-  "events": [
-    {
-      "title": "过 Q3 方案",
-      "emoji": "📊",
-      "details": "与张三讨论 Q3 方案细节",
-      "calendar": "工作",
-      "start": "2026-08-05T10:00:00+08:00",
-      "end": "2026-08-05T11:30:00+08:00",
-      "allDay": false,
-      "direction": "past",
-      "timeVague": false
-    }
-  ],
-  "reminders": [
-    {
-      "title": "交周报",
-      "emoji": "📝",
-      "details": "",
-      "calendar": "工作",
-      "due": "2026-08-06T18:00:00+08:00",
-      "direction": "future",
-      "timeVague": false
-    }
-  ],
-  "recap_range": {
-    "start": "2026-08-05T00:00:00+08:00",
-    "end": "2026-08-05T23:59:59+08:00"
-  }
-}
+\(schemaExample)
 
 字段说明：
 
 - title：简洁的标题，不要包含 emoji
 - emoji：一个与该条内容相关的 emoji
 - details：更详细的描述；没有则填空字符串
-- calendar：上述四个日历名称之一
+- calendar：上述列表中的名称之一
 - start / end：ISO8601 格式，必须带时区偏移
 - allDay：是否为全天事件
 - due：提醒的截止时间，ISO8601 带时区偏移；没有截止时间则为 null
@@ -189,7 +232,7 @@ json 结构如下：
 - timeVague：时间是你根据模糊表述推测的则为 true，用户明确说了时间则为 false
 - recap_range：用户这段叙述所谈论的时间范围。取决于叙述本身覆盖的时段，而不是抽取出的条目的时间跨度——例如用户在讲「今天」做了什么，范围就是今天整天。没有 past 条目时为 null
 
-## 五、禁止
+## 六、禁止
 
 - 禁止输出相对时间词（例如「明天」「下周」），一律换算为 ISO8601 绝对时间
 - 禁止输出重复规则
@@ -423,14 +466,19 @@ print("""
 ─── expected (PRD §11) ───────────────────────────────────
   events 4 · reminders 2
 
-  event   past    \(today) 10:00–11:30   工作   过 Q3 方案
-  event   past    \(today) 15:00         个人   牙齿检查
+  event   past    \(today) 10:00–11:30   工作   过 Q3 方案   ← 边界项
+  event   past    \(today) 15:00                牙齿检查
   event   future  \(today) 晚上           创意   写短篇小说
   event   future  \(nextMonday) 09:00     工作   部门例会
-  remind  future  \(tomorrow)             工作   交周报
-  remind  future  本周五之前               生活/个人  订机票  ← 边界项
+  remind  future  \(tomorrow) 之前               交周报
+  remind  future  本周五之前                     订机票
 
-  边界项「订机票」归到哪个日历，应由日历定义决定；漂移不定说明定义要调。
+  边界项「过 Q3 方案」：在 创意 与 工作 之间摇摆说明两者的定义边界不清。
+  「工作」的定义若只列举几个例子而没有概括句，例子之外的工作内容会被
+  「创意」里的「任何创意类」吸走。
+
+  日历名单来自本文件顶部的 eventCalendars / reminderLists，
+  应与 App 设置保持一致。
 ──────────────────────────────────────────────────────────
 
 counts           events \(events.count)/4   reminders \(reminders.count)/2 \
