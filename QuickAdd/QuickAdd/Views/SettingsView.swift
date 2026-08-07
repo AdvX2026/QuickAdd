@@ -119,11 +119,14 @@ struct SettingsView: View {
                         NavigationLink {
                             CalendarDefinitionEditor(config: config)
                         } label: {
-                            calendarRow(config)
+                            calendarRow(config, among: configs.wrappedValue)
                         }
                     }
+                    // Only usable calendars are offered: a title two accounts
+                    // share would produce duplicate tags, which breaks the
+                    // selection outright.
                     Picker("默认归类", selection: defaultName) {
-                        ForEach(configs.wrappedValue.filter(\.isEnabled)) { config in
+                        ForEach(CalendarSetup.usable(configs.wrappedValue)) { config in
                             Text(config.title).tag(config.title)
                         }
                     }
@@ -133,18 +136,43 @@ struct SettingsView: View {
         }
     }
 
-    private func calendarRow(_ config: Binding<CalendarConfig>) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Toggle(isOn: config.isEnabled) { Text(config.wrappedValue.title) }
-                    .toggleStyle(.switch)
+    private func calendarRow(
+        _ config: Binding<CalendarConfig>, among all: [CalendarConfig]
+    ) -> some View {
+        let value = config.wrappedValue
+        let definition = value.definition.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // The account is shown only when the title alone stops being an answer,
+        // which is the one moment it carries information.
+        let sharesTitle = all.contains { $0.id != value.id && $0.title == value.title }
+        let isAmbiguous = CalendarSetup.ambiguousTitles(among: all).contains(value.title)
+            && value.isEnabled
+
+        return VStack(alignment: .leading, spacing: 3) {
+            Toggle(isOn: config.isEnabled) {
+                HStack(spacing: 6) {
+                    Text(value.title)
+                    if sharesTitle, !value.sourceTitle.isEmpty {
+                        Text(value.sourceTitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-            let definition = config.wrappedValue.definition
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            Text(definition.isEmpty ? "未填写说明，归类准确率会明显下降" : definition)
-                .font(.caption)
-                .foregroundStyle(definition.isEmpty ? .orange : .secondary)
-                .lineLimit(2)
+            .toggleStyle(.switch)
+
+            // Ambiguity outranks a missing definition: until it is resolved the
+            // calendar is out of the pipeline, so its definition is moot.
+            if isAmbiguous {
+                Text("与另一个账户的日历重名，请只启用其中一个")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text(definition.isEmpty ? "未填写说明，归类准确率会明显下降" : definition)
+                    .font(.caption)
+                    .foregroundStyle(definition.isEmpty ? .orange : .secondary)
+                    .lineLimit(2)
+            }
         }
     }
 
@@ -156,7 +184,9 @@ struct SettingsView: View {
         preferredDefault: String?
     ) {
         let merged = CalendarSetup.merge(
-            discovered: calendars.map { ($0.calendarIdentifier, $0.title) },
+            discovered: calendars.map {
+                ($0.calendarIdentifier, $0.title, $0.source?.title ?? "")
+            },
             into: configs.wrappedValue,
             seeds: seeds)
 

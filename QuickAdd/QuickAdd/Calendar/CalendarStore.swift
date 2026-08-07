@@ -57,15 +57,27 @@ final class CalendarStore {
     /// Identifiers are stable in normal use but an account re-login can
     /// invalidate them; recovering by title spares the user a full
     /// reconfiguration (PRD §6.2).
-    func calendar(identifier: String?, title: String?, for entity: EKEntityType) -> EKCalendar? {
+    ///
+    /// The title fallback searches every writable calendar, including ones
+    /// settings has disabled, so it can land on a duplicate the user already
+    /// ruled out. When a title answers for more than one calendar this fails
+    /// instead of picking: writing to the wrong account is silent and, on a
+    /// shared work calendar, not private.
+    func calendar(identifier: String?, title: String?, for entity: EKEntityType) throws -> EKCalendar {
         let all = entity == .event ? writableCalendars() : writableReminderLists()
+
         if let identifier, let match = all.first(where: { $0.calendarIdentifier == identifier }) {
             return match
         }
-        if let title, let match = all.first(where: { $0.title == title }) {
-            return match
+
+        guard let title else { throw CalendarStoreError.calendarUnavailable("") }
+
+        let matches = all.filter { $0.title == title }
+        switch matches.count {
+        case 1:  return matches[0]
+        case 0:  throw CalendarStoreError.calendarUnavailable(title)
+        default: throw CalendarStoreError.calendarAmbiguous(title)
         }
-        return nil
     }
 
     // MARK: - Committing
@@ -125,11 +137,9 @@ final class CalendarStore {
         guard let start = item.startDate else {
             throw CalendarStoreError.missingStartDate
         }
-        guard let calendar = calendar(identifier: item.resolvedCalendarID,
-                                      title: item.calendarName,
-                                      for: .event) else {
-            throw CalendarStoreError.calendarUnavailable(item.calendarName)
-        }
+        let calendar = try calendar(identifier: item.resolvedCalendarID,
+                                    title: item.calendarName,
+                                    for: .event)
 
         let event = EKEvent(eventStore: store)
         event.calendar = calendar
@@ -149,11 +159,9 @@ final class CalendarStore {
         sessionID: UUID,
         formatter: EventFormatter
     ) throws -> String {
-        guard let calendar = calendar(identifier: item.resolvedCalendarID,
-                                      title: item.calendarName,
-                                      for: .reminder) else {
-            throw CalendarStoreError.calendarUnavailable(item.calendarName)
-        }
+        let calendar = try calendar(identifier: item.resolvedCalendarID,
+                                    title: item.calendarName,
+                                    for: .reminder)
 
         let reminder = EKReminder(eventStore: store)
         reminder.calendar = calendar
@@ -179,6 +187,7 @@ final class CalendarStore {
 enum CalendarStoreError: LocalizedError {
     case missingStartDate
     case calendarUnavailable(String)
+    case calendarAmbiguous(String)
 
     var errorDescription: String? {
         switch self {
@@ -186,6 +195,8 @@ enum CalendarStoreError: LocalizedError {
             "事件缺少开始时间"
         case .calendarUnavailable(let name):
             "找不到日历「\(name)」，可能已被删除或重命名"
+        case .calendarAmbiguous(let name):
+            "有多个账户都存在名为「\(name)」的日历，请到设置里只启用其中一个"
         }
     }
 }
