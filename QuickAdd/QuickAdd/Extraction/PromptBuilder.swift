@@ -103,7 +103,7 @@ struct PromptBuilder {
     private func calendarSection() -> String {
         var parts: [String] = []
 
-        let events = settings.enabledCalendars
+        let events = settings.usableCalendars
         if events.isEmpty {
             parts.append("事件（events）的 calendar 统一填 \"默认\"。")
         } else {
@@ -116,7 +116,7 @@ struct PromptBuilder {
             """)
         }
 
-        let reminders = settings.enabledReminderLists
+        let reminders = settings.usableReminderLists
         if reminders.isEmpty {
             parts.append("提醒（reminders）的 calendar 统一填 \"默认\"。")
         } else {
@@ -151,7 +151,7 @@ struct PromptBuilder {
               "title": "过 Q3 方案",
               "emoji": "📊",
               "details": "与张三讨论 Q3 方案细节",
-              "calendar": "\(settings.enabledCalendars.first?.title ?? "默认")",
+              "calendar": "\(settings.usableCalendars.first?.title ?? "默认")",
               "start": "2026-08-05T10:00:00+08:00",
               "end": "2026-08-05T11:30:00+08:00",
               "allDay": false,
@@ -164,7 +164,7 @@ struct PromptBuilder {
               "title": "交周报",
               "emoji": "📝",
               "details": "",
-              "calendar": "\(settings.enabledReminderLists.first?.title ?? "默认")",
+              "calendar": "\(settings.usableReminderLists.first?.title ?? "默认")",
               "due": "2026-08-06T18:00:00+08:00",
               "direction": "future",
               "timeVague": false

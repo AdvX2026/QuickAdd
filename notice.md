@@ -106,4 +106,5 @@ QuickAdd/QuickAdd/
 - **静态段必须含 "json" 字样和 schema 示例**。缺了会让 `json_object` 模式输出空白直到耗尽 token
 - **解析层的容错是刻意的**：`ExtractionResponse` 每个字段都可选、数组逐元素跳过失败项。`json_object` 只保证语法合法，不保证结构
 - **校验层不许让抽取失败**，只标黄（`DraftItem.flag`）。唯一丢弃的情况是标题为空
+- **日历标题只在单个账户内唯一**。多账户同名时两个一起退出流水线（`CalendarSetup.usable`），绝不任选一个 —— 那会把私人回记静默写进同事可见的日历。详见 `Settings/notice.md`
 - 时间推算的三条提示词规则（`PromptBuilder`）都是实测缺陷倒推出来的，改动前先跑 spike 复验

@@ -52,13 +52,40 @@ enum CalendarSetup {
         "日历": "默认归类。以上都不合适、或拿不准时放这里。",
     ]
 
+    // MARK: - Ambiguity
+    //
+    // A calendar title is unique only within an account. Two accounts can each
+    // hold a 工作, and the model names calendars by title, so a duplicated title
+    // has no correct resolution — resolving it either way writes into an account
+    // the user never chose, which is how a personal recap ends up on a
+    // colleague-visible work calendar.
+    //
+    // Rather than guess, a duplicated title stops existing for the pipeline: it
+    // is not offered to the model and not resolvable. Settings is where the user
+    // breaks the tie, by leaving exactly one of them enabled.
+
+    /// Titles that more than one *enabled* calendar answers to.
+    static func ambiguousTitles(among configs: [CalendarConfig]) -> Set<String> {
+        let grouped = Dictionary(grouping: configs.filter(\.isEnabled), by: \.title)
+        return Set(grouped.lazy.filter { $0.value.count > 1 }.map(\.key))
+    }
+
+    /// Enabled and unambiguous — the only calendars the prompt and the validator
+    /// are allowed to see.
+    static func usable(_ configs: [CalendarConfig]) -> [CalendarConfig] {
+        let ambiguous = ambiguousTitles(among: configs)
+        return configs.filter { $0.isEnabled && !ambiguous.contains($0.title) }
+    }
+
+    // MARK: - Merge
+
     /// Rebuilds the stored configs from what EventKit currently reports.
     ///
     /// A definition the user wrote is never overwritten — a seed only ever
     /// fills a blank. Titles are refreshed so a rename in Calendar.app does not
     /// strand the definition attached to that calendar.
     static func merge(
-        discovered: [(identifier: String, title: String)],
+        discovered: [(identifier: String, title: String, sourceTitle: String)],
         into existing: [CalendarConfig],
         seeds: [String: String]
     ) -> [CalendarConfig] {
@@ -66,10 +93,21 @@ enum CalendarSetup {
             existing.map { ($0.calendarIdentifier, $0) },
             uniquingKeysWith: { first, _ in first })
 
+        // A calendar that arrives sharing a title with another starts disabled,
+        // so a second account syncing in can never quietly join the pool the
+        // model picks from. Calendars already in `existing` keep whatever the
+        // user set — the tie may well be one they already broke.
+        let collidingTitles = Set(
+            Dictionary(grouping: discovered, by: \.title)
+                .lazy.filter { $0.value.count > 1 }.map(\.key))
+
         return discovered.map { calendar in
             var config = byIdentifier[calendar.identifier]
-                ?? CalendarConfig(calendarIdentifier: calendar.identifier, title: calendar.title)
+                ?? CalendarConfig(calendarIdentifier: calendar.identifier,
+                                  title: calendar.title,
+                                  isEnabled: !collidingTitles.contains(calendar.title))
             config.title = calendar.title
+            config.sourceTitle = calendar.sourceTitle
 
             let written = config.definition.trimmingCharacters(in: .whitespacesAndNewlines)
             if written.isEmpty, let seed = seeds[calendar.title] {
@@ -90,9 +128,11 @@ enum CalendarSetup {
         among configs: [CalendarConfig],
         preferring preferred: String?
     ) -> String {
-        let enabled = configs.filter(\.isEnabled)
-        if enabled.contains(where: { $0.title == current }) { return current }
-        if let preferred, enabled.contains(where: { $0.title == preferred }) { return preferred }
-        return enabled.first?.title ?? ""
+        // Candidates are the usable set, so the fallback can never be a title
+        // that resolves to two different calendars.
+        let candidates = usable(configs)
+        if candidates.contains(where: { $0.title == current }) { return current }
+        if let preferred, candidates.contains(where: { $0.title == preferred }) { return preferred }
+        return candidates.first?.title ?? ""
     }
 }

@@ -13,7 +13,7 @@ struct DraftEditor: View {
     @Bindable var item: DraftItem
 
     private var availableCalendars: [CalendarConfig] {
-        item.kind == .event ? settings.enabledCalendars : settings.enabledReminderLists
+        item.kind == .event ? settings.usableCalendars : settings.usableReminderLists
     }
 
     var body: some View {
