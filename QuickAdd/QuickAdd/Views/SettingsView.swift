@@ -99,10 +99,11 @@ struct SettingsView: View {
         requestAccess: @escaping () async -> Bool,
         load: @escaping () -> [EKCalendar]
     ) -> some View {
-        let refresh = {
-            merge(load(), into: configs, defaultName: defaultName,
+        let apply: ([EKCalendar]) -> Void = { discovered in
+            merge(discovered, into: configs, defaultName: defaultName,
                   seeds: seeds, preferredDefault: preferredDefault)
         }
+        let refresh = { apply(load()) }
 
         Section(title) {
             if !granted {
@@ -117,9 +118,14 @@ struct SettingsView: View {
                 } else {
                     ForEach(configs) { config in
                         NavigationLink {
-                            CalendarDefinitionEditor(config: config)
+                            CalendarDefinitionEditor(
+                                config: config,
+                                sameTitle: configs.wrappedValue.filter {
+                                    $0.id != config.wrappedValue.id
+                                        && $0.title == config.wrappedValue.title
+                                })
                         } label: {
-                            calendarRow(config, among: configs.wrappedValue)
+                            calendarRow(config.wrappedValue, among: configs.wrappedValue)
                         }
                     }
                     // Only usable calendars are offered: a title two accounts
@@ -134,40 +140,65 @@ struct SettingsView: View {
                 }
             }
         }
+        // Stored configs only learn about EventKit when something calls merge.
+        // Without this, a field added after the config was written stays empty
+        // until the user happens to tap 重新读取 — which is how the account name
+        // that resolves a duplicate ended up invisible exactly when it mattered.
+        .task {
+            guard granted else { return }
+            let discovered = load()
+            // A read that comes back empty is far likelier to be EventKit not
+            // ready than every calendar having been deleted, and merging it
+            // would take the definitions with it. 重新读取 stays unconditional.
+            guard !discovered.isEmpty else { return }
+            apply(discovered)
+        }
     }
 
+    /// The row is purely a label: a Toggle placed here is swallowed by the
+    /// enclosing NavigationLink and cannot be tapped, so enabling lives on the
+    /// detail screen where it has the room to explain itself.
     private func calendarRow(
-        _ config: Binding<CalendarConfig>, among all: [CalendarConfig]
+        _ value: CalendarConfig, among all: [CalendarConfig]
     ) -> some View {
-        let value = config.wrappedValue
         let definition = value.definition.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // The account is shown only when the title alone stops being an answer,
         // which is the one moment it carries information.
         let sharesTitle = all.contains { $0.id != value.id && $0.title == value.title }
-        let isAmbiguous = CalendarSetup.ambiguousTitles(among: all).contains(value.title)
-            && value.isEnabled
+        let isAmbiguous = value.isEnabled
+            && CalendarSetup.ambiguousTitles(among: all).contains(value.title)
 
         return VStack(alignment: .leading, spacing: 3) {
-            Toggle(isOn: config.isEnabled) {
-                HStack(spacing: 6) {
-                    Text(value.title)
-                    if sharesTitle, !value.sourceTitle.isEmpty {
-                        Text(value.sourceTitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+            HStack(spacing: 8) {
+                Text(value.title)
+                    .foregroundStyle(value.isEnabled ? .primary : .secondary)
+
+                if sharesTitle {
+                    Text(value.sourceTitle.isEmpty ? "账户未知" : value.sourceTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(.quaternary, in: .capsule)
+                }
+
+                Spacer(minLength: 0)
+
+                if !value.isEnabled {
+                    Text("已停用")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .toggleStyle(.switch)
 
             // Ambiguity outranks a missing definition: until it is resolved the
             // calendar is out of the pipeline, so its definition is moot.
             if isAmbiguous {
-                Text("与另一个账户的日历重名，请只启用其中一个")
+                Text("与另一个账户的日历重名，点进去只启用其中一个")
                     .font(.caption)
                     .foregroundStyle(.orange)
-            } else {
+            } else if value.isEnabled {
                 Text(definition.isEmpty ? "未填写说明，归类准确率会明显下降" : definition)
                     .font(.caption)
                     .foregroundStyle(definition.isEmpty ? .orange : .secondary)
@@ -208,8 +239,34 @@ private struct CalendarDefinitionEditor: View {
 
     @Binding var config: CalendarConfig
 
+    /// The other calendars answering to this title. Non-empty means the user
+    /// has a choice to make, and cannot make it without knowing what the
+    /// alternatives are.
+    let sameTitle: [CalendarConfig]
+
+    private var account: String {
+        config.sourceTitle.isEmpty ? "账户未知" : config.sourceTitle
+    }
+
     var body: some View {
         Form {
+            Section {
+                LabeledContent("账户", value: account)
+                Toggle("启用", isOn: $config.isEnabled)
+            } footer: {
+                if !sameTitle.isEmpty {
+                    let others = sameTitle
+                        .map { $0.sourceTitle.isEmpty ? "账户未知" : $0.sourceTitle }
+                        .joined(separator: "、")
+                    Text("""
+                    「\(others)」也有一个叫「\(config.title)」的日历。
+
+                    归类只认名称，同时启用两个就无从判断该写进哪个，所以这个名称会整个停用。\
+                    请只保留你平时真正在用的那一个。
+                    """)
+                }
+            }
+
             Section {
                 TextEditor(text: $config.definition)
                     .frame(minHeight: 160)

@@ -51,6 +51,12 @@ Swift 合成的 `Codable` 解码器**不会**用属性默认值填补缺失的 k
 
 设置页只在标题重复时才显示账户名 —— 不重复时它不携带信息，纯噪音。`sourceTitle` 永远只用于显示，身份始终是 `calendarIdentifier`（账户可以改名）。
 
+### 设置页的两个坑（都踩过）
+
+- **列表行里不能放 `Toggle`。** 整行是 `NavigationLink`，label 里的控件点不动。启用开关因此放在详情页（`CalendarDefinitionEditor`）。第一版把开关放在行里，结果是用户看得见"请只启用一个"却无法照做。
+- **`sourceTitle` 这类新字段不会自动出现在旧配置里。** 存量配置解码后该字段为空，只有 `merge` 跑过才会填上。设置页的 `.task` 会在有权限时自动 merge 一次，否则新字段要等用户碰巧点了「重新读取」才生效 —— 恰好在最需要它的时候是空的。
+  - 自动 merge 带一条保护：**读到空列表就跳过**。EventKit 尚未就绪时返回空，直接 merge 会把所有说明一起清掉。「重新读取」按钮不带这条，作为真正要重置时的出口。
+
 ## 其他
 
 - API Key 在 Keychain（`KeychainStore`，service `cn.Teethe.QuickAdd`），不进 UserDefaults、不进版本库。
