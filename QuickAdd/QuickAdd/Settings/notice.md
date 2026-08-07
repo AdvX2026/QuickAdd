@@ -33,6 +33,24 @@
 
 无论走哪条，`merge` / `resolveDefault` 这两个纯函数和它们的测试都不用动 —— 变的只是 `seeds` 从哪来。
 
+## ⚠️ 给 `CalendarConfig` 加字段会清空用户配置（已修，别改回去）
+
+`CalendarConfig` 手写了 `init(from:)`，用 `decodeIfPresent` 给每个非身份字段兜底。**这不是可有可无的样板代码。**
+
+Swift 合成的 `Codable` 解码器**不会**用属性默认值填补缺失的 key，缺 key 就抛 `keyNotFound`；而 `AppSettings.loadJSON` 用 `try?` 吞掉异常返回 nil，`calendars` 于是变成 `[]`。连起来就是：**加一个字段 → 老配置解码失败 → 用户所有日历说明和开关在更新后第一次启动时被静默清空**。
+
+加 `sourceTitle` 时正好会踩到，`CalendarConfigCodableTests` 钉住了这个行为。以后加字段：给默认值 + 在 `init(from:)` 里用 `decodeIfPresent`。
+
+## 多账户同名日历
+
+标题只在单个账户内唯一 —— iCloud 和 Google 可能各有一个「工作」。规则是 **`CalendarSetup.usable`：启用且标题唯一才可用**，同名的两个一起退出流水线，直到用户在设置里只留一个。
+
+为什么不是任选一个：LLM 按名称归类，它没有任何依据去选账户；任选的后果是私人回记被静默写进同事可见的公司日历。两个都禁用会让条目落到默认日历并标黄 —— 吵，但看得见。
+
+**为什么不把账户名写进提示词**：用户的心智模型是「类别」不是「账户」，同一类别只应有一个日历接收写入。把账户塞进提示词等于要求模型做一个它无法判断的选择，还会扰动已调稳的归类。
+
+设置页只在标题重复时才显示账户名 —— 不重复时它不携带信息，纯噪音。`sourceTitle` 永远只用于显示，身份始终是 `calendarIdentifier`（账户可以改名）。
+
 ## 其他
 
 - API Key 在 Keychain（`KeychainStore`，service `cn.Teethe.QuickAdd`），不进 UserDefaults、不进版本库。
