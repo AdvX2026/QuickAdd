@@ -54,6 +54,8 @@ struct SettingsView: View {
                     configs: $settings.calendars,
                     defaultName: $settings.defaultCalendarName,
                     granted: calendarStore.hasEventAccess,
+                    seeds: CalendarSetup.eventDefinitions,
+                    preferredDefault: CalendarSetup.defaultEventCalendarTitle,
                     requestAccess: { await calendarStore.requestEventAccess() },
                     load: { calendarStore.writableCalendars() }
                 )
@@ -92,23 +94,26 @@ struct SettingsView: View {
         configs: Binding<[CalendarConfig]>,
         defaultName: Binding<String>,
         granted: Bool,
+        seeds: [String: String] = [:],
+        preferredDefault: String? = nil,
         requestAccess: @escaping () async -> Bool,
         load: @escaping () -> [EKCalendar]
     ) -> some View {
+        let refresh = {
+            merge(load(), into: configs, defaultName: defaultName,
+                  seeds: seeds, preferredDefault: preferredDefault)
+        }
+
         Section(title) {
             if !granted {
                 Button("授权访问") {
                     Task {
-                        if await requestAccess() {
-                            merge(load(), into: configs, defaultName: defaultName)
-                        }
+                        if await requestAccess() { refresh() }
                     }
                 }
             } else {
                 if configs.wrappedValue.isEmpty {
-                    Button("读取列表") {
-                        merge(load(), into: configs, defaultName: defaultName)
-                    }
+                    Button("读取列表", action: refresh)
                 } else {
                     ForEach(configs) { config in
                         NavigationLink {
@@ -122,9 +127,7 @@ struct SettingsView: View {
                             Text(config.title).tag(config.title)
                         }
                     }
-                    Button("重新读取") {
-                        merge(load(), into: configs, defaultName: defaultName)
-                    }
+                    Button("重新读取", action: refresh)
                 }
             }
         }
@@ -145,30 +148,21 @@ struct SettingsView: View {
         }
     }
 
-    /// Refreshes the list from EventKit while preserving the definitions the
-    /// user already wrote — those are the expensive part.
     private func merge(
         _ calendars: [EKCalendar],
         into configs: Binding<[CalendarConfig]>,
-        defaultName: Binding<String>
+        defaultName: Binding<String>,
+        seeds: [String: String],
+        preferredDefault: String?
     ) {
-        let existing = Dictionary(
-            configs.wrappedValue.map { ($0.calendarIdentifier, $0) },
-            uniquingKeysWith: { first, _ in first })
+        let merged = CalendarSetup.merge(
+            discovered: calendars.map { ($0.calendarIdentifier, $0.title) },
+            into: configs.wrappedValue,
+            seeds: seeds)
 
-        configs.wrappedValue = calendars.map { calendar in
-            if var kept = existing[calendar.calendarIdentifier] {
-                kept.title = calendar.title   // picks up a rename
-                return kept
-            }
-            return CalendarConfig(
-                calendarIdentifier: calendar.calendarIdentifier, title: calendar.title)
-        }
-
-        let enabled = configs.wrappedValue.filter(\.isEnabled)
-        if !enabled.contains(where: { $0.title == defaultName.wrappedValue }) {
-            defaultName.wrappedValue = enabled.first?.title ?? ""
-        }
+        configs.wrappedValue = merged
+        defaultName.wrappedValue = CalendarSetup.resolveDefault(
+            current: defaultName.wrappedValue, among: merged, preferring: preferredDefault)
     }
 
     private func saveKey() {
