@@ -137,7 +137,7 @@ private struct SetupPromptView: View {
         ContentUnavailableView {
             Label("还没配置日历", systemImage: "calendar.badge.exclamationmark")
         } description: {
-            Text("到设置里选择要使用的日历，并说明每个日历放什么内容。\n描述得越清楚，归类越准。")
+            Text("到设置里选择要使用的日历、指定「默认归类」，并说明每个日历放什么内容。\n描述得越清楚，归类越准。")
         }
         .padding(.horizontal, 24)
     }

@@ -132,6 +132,12 @@ struct SettingsView: View {
                     // share would produce duplicate tags, which breaks the
                     // selection outright.
                     Picker("默认归类", selection: defaultName) {
+                        // Nothing is chosen until the user chooses. Without a
+                        // tag for it the picker just renders blank, which reads
+                        // as a glitch rather than as a decision waiting.
+                        if defaultName.wrappedValue.isEmpty {
+                            Text("请选择").tag("")
+                        }
                         ForEach(CalendarSetup.usable(configs.wrappedValue)) { config in
                             Text(config.title).tag(config.title)
                         }

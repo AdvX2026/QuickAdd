@@ -117,22 +117,24 @@ enum CalendarSetup {
         }
     }
 
-    /// Keeps the user's pick while it still exists, otherwise prefers
-    /// `preferred` and falls back to whatever is enabled.
+    /// Keeps the user's pick while it still exists, otherwise falls to the
+    /// catch-all — and if that is absent, to nothing at all.
     ///
-    /// `AppSettings.isConfigured` requires a non-empty default, and a wrong one
-    /// silently routes every unclassifiable item into an arbitrary calendar, so
-    /// this must not just grab the first entry EventKit happens to return.
+    /// Returning "" is the point. Everything the model cannot classify lands in
+    /// the default, so picking one on the user's behalf buries those items in
+    /// whichever calendar happened to sort first, silently and forever. An
+    /// empty default fails `AppSettings.isConfigured`, which sends the user to
+    /// the picker to say what they actually want.
     static func resolveDefault(
         current: String,
         among configs: [CalendarConfig],
         preferring preferred: String?
     ) -> String {
-        // Candidates are the usable set, so the fallback can never be a title
+        // Candidates are the usable set, so the default can never be a title
         // that resolves to two different calendars.
         let candidates = usable(configs)
         if candidates.contains(where: { $0.title == current }) { return current }
         if let preferred, candidates.contains(where: { $0.title == preferred }) { return preferred }
-        return candidates.first?.title ?? ""
+        return ""
     }
 }

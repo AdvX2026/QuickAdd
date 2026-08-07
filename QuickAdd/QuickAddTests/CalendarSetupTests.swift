@@ -143,17 +143,27 @@ struct CalendarSetupTests {
         #expect(resolved == "日历")
     }
 
-    @Test("Without the preferred calendar the first enabled one is used")
-    func fallsBackToFirstEnabled() {
+    @Test("With no catch-all calendar the default is left unset, not guessed")
+    func noCatchAllLeavesDefaultUnset() {
+        // Someone whose calendars are 创意/工作/生活 has no 日历. Picking one of
+        // those would quietly turn a category calendar into the bucket every
+        // unclassifiable item falls into.
         let configs = [
-            CalendarConfig(calendarIdentifier: "id-off", title: "关掉的", isEnabled: false),
+            CalendarConfig(calendarIdentifier: "id-idea", title: "创意"),
             CalendarConfig(calendarIdentifier: "id-work", title: "工作"),
         ]
 
         let resolved = CalendarSetup.resolveDefault(
             current: "不存在", among: configs, preferring: "日历")
 
-        #expect(resolved == "工作")
+        #expect(resolved.isEmpty)
+    }
+
+    @Test("An unset default reads as unconfigured so the user is asked")
+    func unsetDefaultIsNotConfigured() {
+        let settings = AppSettingsAmbiguityTests.settings { $0.defaultCalendarName = "" }
+
+        #expect(!settings.isConfigured)
     }
 
     @Test("A disabled calendar cannot be the default")
