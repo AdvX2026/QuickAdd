@@ -66,4 +66,4 @@ swift Spike/deepseek-probe.swift --effort high
 - 「晚上」这种模糊时段怎么处理
 - **「订机票」归到哪个日历** —— 它是有意设计的边界项，用来检验日历定义的边界描述是否生效
 
-日历定义写死在脚本的 `staticPrompt` 里（创意/工作/生活/个人）。如果归类不准，改那段文字重跑，比改代码有效得多。
+日历定义在脚本顶部的 `eventCalendars` 里。如果归类不准，改那段文字重跑，比改代码有效得多。改稳之后要同步到 App 的 `Settings/CalendarSetup.eventDefinitions`（见根 `notice.md`）。

@@ -25,6 +25,12 @@ xcodebuild -project QuickAdd/QuickAdd.xcodeproj -scheme QuickAdd -showdestinatio
 
 但**新增 Info.plist 键仍需改 pbxproj**：工程用 `GENERATE_INFOPLIST_FILE`，权限文案等以 `INFOPLIST_KEY_*` 形式写在 build settings 里，Debug 和 Release 两套配置都要加。
 
+同步文件夹的另一面：**非源码文件会被当成资源打进 App bundle**。往 `QuickAdd/QuickAdd/` 下放 `notice.md` 时踩到过，已用 `EXCLUDED_SOURCE_FILE_NAMES = "*.md"`（两套配置都加了）挡掉，新增 `.md` 不用再管。放其他类型的非源码文件前，先构建后确认一下 bundle 里没有它：
+
+```bash
+ls <DerivedData>/Build/Products/Debug-iphonesimulator/QuickAdd.app
+```
+
 写代码时 SourceKit 常报 "Cannot find type X in scope"，那是索引滞后于新建文件，**以 `xcodebuild` 结果为准**。
 
 ## 密钥
@@ -50,11 +56,15 @@ swift Spike/deepseek-probe.swift --no-thinking
 
 | 位置 | 角色 |
 |---|---|
-| `Spike/deepseek-probe.swift` 顶部 `eventCalendars` | **经过验证的版本，事实来源** |
-| App 设置页（UserDefaults） | 运行时实际使用的版本，需人工从上面抄 |
+| `Spike/deepseek-probe.swift` 顶部 `eventCalendars` | spike 用的版本 |
+| `Settings/CalendarSetup.eventDefinitions` | App 用的版本，首次读取日历时自动写入设置 |
 | `PromptBuilder.calendarSection()` | 只负责渲染，不含定义本身 |
 
-改定义的流程：先在 spike 里改并跑几次验证 → 验稳了抄进 App 设置。反向同步（读出 App 里的真实配置）：
+前两处内容必须一致，**都在版本库里，可以直接 diff**。改定义的流程：先在 spike 里改并验几次 → 验稳了同步到 `CalendarSetup`。
+
+为什么定义要硬编码在 App 代码里、以及日后上架要怎么改，见 `QuickAdd/QuickAdd/Settings/notice.md`。
+
+设置页里的说明一旦手工改过就不会被种子覆盖，所以排查归类问题时要读设备上的真实配置：
 
 ```bash
 plutil -p ~/Library/Developer/CoreSimulator/Devices/*/data/Containers/Data/\
