@@ -7,15 +7,15 @@ Keep it to durable, cross-session guidance — product, rules, standards, securi
 
 ## Product
 
-QuickAdd（闪记）把模糊的自然语言转成结构化的日历事件与提醒事项。它的特点是**双向**：既能规划未来（`future`），也能**回记**（`past`）——把已经做完的事写进日历，当成回溯式的存档。归类是语义的：每个日历（工作/创意/学习/个人/生活/旅行/睡眠/日历）在设置中带一段说明，注入系统提示词，由 LLM 判断归属。
+QuickAdd (闪记) turns loose natural language into structured calendar events and reminders. What distinguishes it is that capture runs in both directions: not only planning ahead (`future`) but **back-logging** (`past`) — writing already-finished activity into the calendar as a retrospective archive. Classification is semantic: every calendar (工作/创意/学习/个人/生活/旅行/睡眠/日历) carries a definition written in settings and injected into the system prompt, and the model decides where an item belongs.
 
-**单人自用的 iOS App**，最低 iOS 26.5，SwiftUI + Liquid Glass + SwiftData + EventKit，抽取走 DeepSeek（`deepseek-v4-flash`，OpenAI 兼容接口）。没有服务端、没有账号体系，数据只在设备本地和用户自己的 iCloud 日历里。不面向公开分发——若要上架，日历定义的处理方式必须先改（见 `QuickAdd/QuickAdd/Settings/notice.md`）。
+A **single-user iOS app**, deployment target iOS 26.5, built on SwiftUI with Liquid Glass, SwiftData and EventKit, extracting through DeepSeek (`deepseek-v4-flash`, OpenAI-compatible API). No server and no accounts; data lives on the device and in the user's own iCloud calendars. Not intended for public distribution — shipping would first require changing how calendar definitions work (see `QuickAdd/QuickAdd/Settings/notice.md`).
 
 ## Project Phase
 
-- **QuickAdd（iOS App）**：M0 完成并通过验收。文本输入 → 抽取 → 草稿审阅/编辑 → 写入日历与提醒，全程 SwiftData 留痕；设置页含模型配置、日历语义说明、写入格式。PRD §11 验收输入三次运行 6/6 全中（2026-08-08，见 PRD §11 实测记录），写入与真机实测均已通过。69 个单元测试覆盖抽取解析、校验规则、写入格式、日历配置合并。
-- **下一步**：M1 语音输入（`SpeechAnalyzer` + `SpeechTranscriber`）。输入条布局已预留麦克风位置。
-- **已知不稳定**：约 1/9 概率整条漏抽（模型行为，非实现缺陷）；提醒只给日期不给时间时，时间点在 18:00/23:59 间摆动。详见根 `notice.md` 的已测基线。
+- **QuickAdd (iOS app)**: M0 complete and accepted. Text in → extraction → draft review and editing → written to the matching calendars and reminder lists, with SwiftData recording every step; settings cover model config, calendar definitions, and write formatting. The PRD §11 acceptance input hit all six expectations across three runs with nothing dropped (2026-08-08, recorded in PRD §11); the write path and on-device use are both verified. 69 unit tests cover extraction parsing, validation rules, write formatting, and calendar config merging.
+- **Next**: M1 voice input (`SpeechAnalyzer` + `SpeechTranscriber`). The input bar already reserves the microphone slot.
+- **Known instability**: roughly 1 run in 9 drops an item outright — model behaviour, not an implementation defect. A reminder given a date but no time lands on either 18:00 or 23:59. See the measured baselines in the root `notice.md`.
 
 ## Development Rules
 
@@ -73,7 +73,8 @@ QuickAdd（闪记）把模糊的自然语言转成结构化的日历事件与提
 - Before committing, inspect dirty files and separate current-task agent edits from unrecognized dirty files. Do not include unrecognized dirty files in commits unless the user explicitly asks to include them.
 - If a dirty file's ownership or task relevance cannot be determined safely, stop and ask the user before committing.
 - Group commits by coherent change unit. Do not push unless explicitly requested.
-- Branching: per-feature work lands on a `feat/*` branch that merges into the mainline. Keep merged `feat/*` branches as historical archives — never delete them (local or remote).
+- Branching: `feat/*` for features, always. Otherwise branch **only when the change unit spans more than one commit, or might be abandoned partway**. A merge commit earns its place by framing several commits as one unit; a single-commit branch just doubles the log entries and buries the mainline under `Merge branch` lines. One-commit fixes, docs, and config go straight to the mainline.
+- Keep merged `feat/*` branches as historical archives — never delete them, and **push them**: an archive that exists on one machine is not an archive. Merged `fix/*` and `docs/*` branches hold nothing their merge commit does not, and can be pruned.
 - Commit message format (Conventional Commits):
   ```
   type(scope): short summary
