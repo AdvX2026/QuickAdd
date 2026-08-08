@@ -7,12 +7,15 @@ Keep it to durable, cross-session guidance — product, rules, standards, securi
 
 ## Product
 
-<!-- TODO: One paragraph describing this project — what it is, who uses it, the platform/runtime target, and any defining constraints (single- vs multi-user, sandboxed or not, deployment target, scale). -->
+QuickAdd（闪记）把模糊的自然语言转成结构化的日历事件与提醒事项。它的特点是**双向**：既能规划未来（`future`），也能**回记**（`past`）——把已经做完的事写进日历，当成回溯式的存档。归类是语义的：每个日历（工作/创意/学习/个人/生活/旅行/睡眠/日历）在设置中带一段说明，注入系统提示词，由 LLM 判断归属。
+
+**单人自用的 iOS App**，最低 iOS 26.5，SwiftUI + Liquid Glass + SwiftData + EventKit，抽取走 DeepSeek（`deepseek-v4-flash`，OpenAI 兼容接口）。没有服务端、没有账号体系，数据只在设备本地和用户自己的 iCloud 日历里。不面向公开分发——若要上架，日历定义的处理方式必须先改（见 `QuickAdd/QuickAdd/Settings/notice.md`）。
 
 ## Project Phase
 
-<!-- TODO: A terse, kept-current snapshot of each app/package — not a log. Update in place; don't append history. -->
-- **<app/package name>**: TODO — what's built, what's tested.
+- **QuickAdd（iOS App）**：M0 完成并通过验收。文本输入 → 抽取 → 草稿审阅/编辑 → 写入日历与提醒，全程 SwiftData 留痕；设置页含模型配置、日历语义说明、写入格式。PRD §11 验收输入三次运行 6/6 全中（2026-08-08，见 PRD §11 实测记录），写入与真机实测均已通过。69 个单元测试覆盖抽取解析、校验规则、写入格式、日历配置合并。
+- **下一步**：M1 语音输入（`SpeechAnalyzer` + `SpeechTranscriber`）。输入条布局已预留麦克风位置。
+- **已知不稳定**：约 1/9 概率整条漏抽（模型行为，非实现缺陷）；提醒只给日期不给时间时，时间点在 18:00/23:59 间摆动。详见根 `notice.md` 的已测基线。
 
 ## Development Rules
 
